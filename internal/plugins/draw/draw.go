@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -176,7 +177,7 @@ func (p *plugin) parse(text string) (drawArgs, error) {
 }
 
 func (p *plugin) generate(args drawArgs) ([]imageData, error) {
-	body, err := json.Marshal(generationRequest{
+	payload := generationRequest{
 		Model:  p.cfg.Model,
 		Prompt: args.prompt,
 		N:      args.n,
@@ -185,10 +186,17 @@ func (p *plugin) generate(args drawArgs) ([]imageData, error) {
 		ExtraBody: map[string]interface{}{
 			"response_format": responseFormatURL,
 		},
-	})
+	}
+
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
+	debugBody, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("[draw] 请求绘图接口: POST %s\n%s", p.endpoint(), string(debugBody))
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, p.endpoint(), bytes.NewReader(body))
 	if err != nil {
