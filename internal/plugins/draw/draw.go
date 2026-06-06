@@ -188,11 +188,11 @@ func (p *plugin) generate(args drawArgs) ([]imageData, error) {
 		},
 	}
 
-	body, err := json.Marshal(payload)
+	body, err := marshalJSON(payload, false)
 	if err != nil {
 		return nil, err
 	}
-	debugBody, err := json.MarshalIndent(payload, "", "  ")
+	debugBody, err := marshalJSON(payload, true)
 	if err != nil {
 		return nil, err
 	}
@@ -324,13 +324,35 @@ func extractImagesFromMessage(msg message.Message) []string {
 
 func imageSource(segment message.Segment) string {
 	for _, key := range []string{"url", "file"} {
-		source := html.UnescapeString(strings.TrimSpace(segment.Data[key]))
+		source := normalizeImageSource(segment.Data[key])
 		if isSupportedInputImage(source) {
 			return source
 		}
 	}
 
 	return ""
+}
+
+func normalizeImageSource(source string) string {
+	source = strings.TrimSpace(source)
+	source = strings.ReplaceAll(source, "&amp;", "&")
+	source = html.UnescapeString(source)
+
+	return source
+}
+
+func marshalJSON(value interface{}, indent bool) ([]byte, error) {
+	buf := &bytes.Buffer{}
+	encoder := json.NewEncoder(buf)
+	encoder.SetEscapeHTML(false)
+	if indent {
+		encoder.SetIndent("", "  ")
+	}
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+
+	return bytes.TrimSpace(buf.Bytes()), nil
 }
 
 func isSupportedInputImage(source string) bool {
