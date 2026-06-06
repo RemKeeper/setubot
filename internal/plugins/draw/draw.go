@@ -42,7 +42,6 @@ type generationRequest struct {
 	Prompt    string                 `json:"prompt"`
 	N         int                    `json:"n,omitempty"`
 	Size      string                 `json:"size,omitempty"`
-	Image     []string               `json:"image,omitempty"`
 	ExtraBody map[string]interface{} `json:"extra_body,omitempty"`
 }
 
@@ -177,15 +176,19 @@ func (p *plugin) parse(text string) (drawArgs, error) {
 }
 
 func (p *plugin) generate(args drawArgs) ([]imageData, error) {
+	extraBody := map[string]interface{}{
+		"response_format": responseFormatURL,
+	}
+	if len(args.images) > 0 {
+		extraBody["image"] = args.images
+	}
+
 	payload := generationRequest{
-		Model:  p.cfg.Model,
-		Prompt: args.prompt,
-		N:      args.n,
-		Size:   args.size,
-		Image:  args.images,
-		ExtraBody: map[string]interface{}{
-			"response_format": responseFormatURL,
-		},
+		Model:     p.cfg.Model,
+		Prompt:    args.prompt,
+		N:         args.n,
+		Size:      args.size,
+		ExtraBody: extraBody,
 	}
 
 	body, err := marshalJSON(payload, false)
