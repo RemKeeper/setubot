@@ -24,6 +24,8 @@ var (
 	sizePattern        = regexp.MustCompile(`\s+分辨率(\d+x\d+)\s*$`)
 )
 
+const responseFormatURL = "url"
+
 type plugin struct {
 	cfg           config.DrawConfig
 	client        *http.Client
@@ -32,10 +34,12 @@ type plugin struct {
 }
 
 type generationRequest struct {
-	Model  string `json:"model,omitempty"`
-	Prompt string `json:"prompt"`
-	N      int    `json:"n"`
-	Size   string `json:"size,omitempty"`
+	Model     string                 `json:"model,omitempty"`
+	Prompt    string                 `json:"prompt"`
+	N         int                    `json:"n,omitempty"`
+	Size      string                 `json:"size,omitempty"`
+	Image     []string               `json:"image,omitempty"`
+	ExtraBody map[string]interface{} `json:"extra_body,omitempty"`
 }
 
 type generationResponse struct {
@@ -51,6 +55,7 @@ type drawArgs struct {
 	prompt string
 	n      int
 	size   string
+	images []string
 }
 
 func Register(cfg config.DrawConfig) {
@@ -62,7 +67,11 @@ func Register(cfg config.DrawConfig) {
 
 	zero.OnFullMatch("开启绘图", zero.OnlyGroup, zero.SuperUserPermission).Handle(p.enableGroup)
 	zero.OnFullMatch("关闭绘图", zero.OnlyGroup, zero.SuperUserPermission).Handle(p.disableGroup)
-	zero.OnRegex(`^绘图(?:\d+张)?\s+.+`).Handle(p.draw)
+	zero.OnMessage(p.isDrawCommand).Handle(p.draw)
+}
+
+func (p *plugin) isDrawCommand(ctx *zero.Ctx) bool {
+	return drawCommandPattern.MatchString(strings.TrimSpace(ctx.ExtractPlainText()))
 }
 
 func (p *plugin) enableGroup(ctx *zero.Ctx) {
@@ -94,8 +103,13 @@ func (p *plugin) draw(ctx *zero.Ctx) {
 		ctx.Send(err.Error())
 		return
 	}
+	args.images = p.extractInputImages(ctx)
 
-	ctx.Send("正在绘图，请稍候...")
+	if len(args.images) > 0 {
+		ctx.Send("正在二次编辑图片，请稍候...")
+	} else {
+		ctx.Send("正在绘图，请稍候...")
+	}
 	images, err := p.generate(args)
 	if err != nil {
 		ctx.Send(fmt.Sprintf("绘图失败：%v", err))
@@ -162,6 +176,10 @@ func (p *plugin) generate(args drawArgs) ([]imageData, error) {
 		Prompt: args.prompt,
 		N:      args.n,
 		Size:   args.size,
+		Image:  args.images,
+		ExtraBody: map[string]interface{}{
+			"response_format": responseFormatURL,
+		},
 	})
 	if err != nil {
 		return nil, err
@@ -198,6 +216,67 @@ func (p *plugin) generate(args drawArgs) ([]imageData, error) {
 
 func (p *plugin) endpoint() string {
 	return strings.TrimRight(p.cfg.BaseURL, "/") + "/v1/images/generations/"
+}
+
+func (p *plugin) extractInputImages(ctx *zero.Ctx) []string {
+	images := extractImagesFromMessage(ctx.Event.Message)
+	if len(images) > 0 {
+		return images
+	}
+
+	replyID := extractReplyID(ctx.Event.Message)
+	if replyID == "" {
+		return nil
+	}
+
+	replied := ctx.GetMessage(replyID, true)
+	return extractImagesFromMessage(replied.Elements)
+}
+
+func extractReplyID(msg message.Message) string {
+	for _, segment := range msg {
+		if segment.Type == "reply" {
+			return segment.Data["id"]
+		}
+	}
+
+	return ""
+}
+
+func extractImagesFromMessage(msg message.Message) []string {
+	images := make([]string, 0)
+	for _, segment := range msg {
+		if segment.Type != "image" {
+			continue
+		}
+
+		image := imageSource(segment)
+		if image == "" {
+			continue
+		}
+
+		images = append(images, image)
+	}
+
+	return images
+}
+
+func imageSource(segment message.Segment) string {
+	for _, key := range []string{"url", "file"} {
+		source := strings.TrimSpace(segment.Data[key])
+		if isSupportedInputImage(source) {
+			return source
+		}
+	}
+
+	return ""
+}
+
+func isSupportedInputImage(source string) bool {
+	return strings.HasPrefix(source, "http://") ||
+		strings.HasPrefix(source, "https://") ||
+		strings.HasPrefix(source, "data:image/") ||
+		strings.HasPrefix(source, "base64://")
 }
 
 func (p *plugin) isGroupEnabled(groupID int64) bool {
