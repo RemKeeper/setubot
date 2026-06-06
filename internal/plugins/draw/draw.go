@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"regexp"
@@ -31,6 +32,8 @@ type plugin struct {
 	client        *http.Client
 	groupEnabled  map[int64]bool
 	groupEnabledM sync.RWMutex
+	imageCache    map[string][]string
+	imageCacheM   sync.RWMutex
 }
 
 type generationRequest struct {
@@ -63,8 +66,10 @@ func Register(cfg config.DrawConfig) {
 		cfg:          cfg,
 		client:       &http.Client{Timeout: time.Duration(cfg.Timeout) * time.Second},
 		groupEnabled: make(map[int64]bool),
+		imageCache:   make(map[string][]string),
 	}
 
+	zero.OnMessage().Handle(p.cacheImages)
 	zero.OnFullMatch("开启绘图", zero.OnlyGroup, zero.SuperUserPermission).Handle(p.enableGroup)
 	zero.OnFullMatch("关闭绘图", zero.OnlyGroup, zero.SuperUserPermission).Handle(p.disableGroup)
 	zero.OnMessage(p.isDrawCommand).Handle(p.draw)
@@ -218,6 +223,19 @@ func (p *plugin) endpoint() string {
 	return strings.TrimRight(p.cfg.BaseURL, "/") + "/v1/images/generations/"
 }
 
+func (p *plugin) cacheImages(ctx *zero.Ctx) {
+	images := extractImagesFromMessage(ctx.Event.Message)
+	if len(images) == 0 {
+		return
+	}
+
+	for _, key := range messageCacheKeys(ctx.Event.MessageID, ctx.Event.RawMessageID) {
+		p.imageCacheM.Lock()
+		p.imageCache[key] = images
+		p.imageCacheM.Unlock()
+	}
+}
+
 func (p *plugin) extractInputImages(ctx *zero.Ctx) []string {
 	images := extractImagesFromMessage(ctx.Event.Message)
 	if len(images) > 0 {
@@ -228,9 +246,44 @@ func (p *plugin) extractInputImages(ctx *zero.Ctx) []string {
 	if replyID == "" {
 		return nil
 	}
+	if images := p.cachedImages(replyID); len(images) > 0 {
+		return images
+	}
 
 	replied := ctx.GetMessage(replyID, true)
 	return extractImagesFromMessage(replied.Elements)
+}
+
+func (p *plugin) cachedImages(messageID string) []string {
+	p.imageCacheM.RLock()
+	images := append([]string(nil), p.imageCache[messageID]...)
+	p.imageCacheM.RUnlock()
+
+	return images
+}
+
+func messageCacheKeys(messageID interface{}, rawMessageID json.RawMessage) []string {
+	keys := make([]string, 0, 2)
+	if messageID != nil {
+		keys = append(keys, fmt.Sprint(messageID))
+	}
+
+	raw := strings.Trim(strings.TrimSpace(string(rawMessageID)), `"`)
+	if raw != "" && !containsString(keys, raw) {
+		keys = append(keys, raw)
+	}
+
+	return keys
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+
+	return false
 }
 
 func extractReplyID(msg message.Message) string {
@@ -263,7 +316,7 @@ func extractImagesFromMessage(msg message.Message) []string {
 
 func imageSource(segment message.Segment) string {
 	for _, key := range []string{"url", "file"} {
-		source := strings.TrimSpace(segment.Data[key])
+		source := html.UnescapeString(strings.TrimSpace(segment.Data[key]))
 		if isSupportedInputImage(source) {
 			return source
 		}
