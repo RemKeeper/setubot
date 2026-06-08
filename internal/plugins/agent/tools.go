@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	openai "github.com/sashabaranov/go-openai"
 )
 
 func (p *plugin) callBrowser(name string, args map[string]interface{}) (string, error) {
@@ -57,7 +59,7 @@ func (p *plugin) browserRequest(method string, path string, body io.Reader) (str
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	resp, err := p.client.Do(req)
+	resp, err := p.httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -74,11 +76,11 @@ func (p *plugin) browserRequest(method string, path string, body io.Reader) (str
 	return strings.TrimSpace(string(respBody)), nil
 }
 
-func (p *plugin) toolDefinitions() []toolDef {
-	tools := []toolDef{
+func (p *plugin) toolDefinitions() []openai.Tool {
+	tools := []openai.Tool{
 		{
-			Type: "function",
-			Function: toolFunction{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
 				Name:        "read_skill",
 				Description: "读取一个本地 skill 文件。",
 				Parameters: objectSchema(map[string]interface{}{
@@ -87,8 +89,8 @@ func (p *plugin) toolDefinitions() []toolDef {
 			},
 		},
 		{
-			Type: "function",
-			Function: toolFunction{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
 				Name:        "write_memory",
 				Description: "写入或更新一条持久化记忆。",
 				Parameters: objectSchema(map[string]interface{}{
@@ -98,8 +100,8 @@ func (p *plugin) toolDefinitions() []toolDef {
 			},
 		},
 		{
-			Type: "function",
-			Function: toolFunction{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
 				Name:        "read_memory",
 				Description: "读取一条持久化记忆。",
 				Parameters: objectSchema(map[string]interface{}{
@@ -113,7 +115,7 @@ func (p *plugin) toolDefinitions() []toolDef {
 		return tools
 	}
 
-	browserTools := []toolDef{
+	browserTools := []openai.Tool{
 		functionTool("browser_goto", "让浏览器访问指定 URL。", map[string]interface{}{"url": stringSchema("要访问的完整 URL")}, []string{"url"}),
 		functionTool("browser_click", "点击页面上的 CSS 选择器。", map[string]interface{}{"selector": stringSchema("CSS 选择器"), "force": boolSchema("是否强制点击")}, []string{"selector"}),
 		functionTool("browser_type", "在页面元素中输入文本。", map[string]interface{}{"selector": stringSchema("CSS 选择器"), "text": stringSchema("输入文本"), "delay": numberSchema("输入延迟毫秒")}, []string{"selector", "text"}),
@@ -126,10 +128,10 @@ func (p *plugin) toolDefinitions() []toolDef {
 	return append(tools, browserTools...)
 }
 
-func functionTool(name string, description string, properties map[string]interface{}, required []string) toolDef {
-	return toolDef{
-		Type: "function",
-		Function: toolFunction{
+func functionTool(name string, description string, properties map[string]interface{}, required []string) openai.Tool {
+	return openai.Tool{
+		Type: openai.ToolTypeFunction,
+		Function: &openai.FunctionDefinition{
 			Name:        name,
 			Description: description,
 			Parameters:  objectSchema(properties, required),

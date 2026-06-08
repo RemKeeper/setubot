@@ -30,18 +30,22 @@ type DrawConfig struct {
 }
 
 type AgentConfig struct {
-	Enabled          bool          `json:"enabled"`
-	BaseURL          string        `json:"baseURL"`
-	APIKey           string        `json:"apiKey"`
-	Model            string        `json:"model"`
-	SystemPrompt     string        `json:"systemPrompt"`
-	SkillDir         string        `json:"skillDir"`
-	MemoryDir        string        `json:"memoryDir"`
-	Timeout          int           `json:"timeout"`
-	MaxToolRounds    int           `json:"maxToolRounds"`
-	MaxResponseChars int           `json:"maxResponseChars"`
-	Temperature      float64       `json:"temperature"`
-	Browser          BrowserConfig `json:"browser"`
+	Enabled             bool          `json:"enabled"`
+	BaseURL             string        `json:"baseURL"`
+	APIKey              string        `json:"apiKey"`
+	Model               string        `json:"model"`
+	SystemPrompt        string        `json:"systemPrompt"`
+	SkillDir            string        `json:"skillDir"`
+	MemoryDir           string        `json:"memoryDir"`
+	Timeout             int           `json:"timeout"`
+	MaxToolRounds       int           `json:"maxToolRounds"`
+	MaxContextTurns     int           `json:"maxContextTurns"`
+	SummaryTriggerTurns int           `json:"summaryTriggerTurns"`
+	SummaryKeepTurns    int           `json:"summaryKeepTurns"`
+	ContextTTL          int           `json:"contextTTL"`
+	MaxResponseChars    int           `json:"maxResponseChars"`
+	Temperature         float64       `json:"temperature"`
+	Browser             BrowserConfig `json:"browser"`
 }
 
 type BrowserConfig struct {
@@ -122,6 +126,18 @@ func (cfg AgentConfig) withDefaults() AgentConfig {
 	}
 	if cfg.MaxToolRounds <= 0 {
 		cfg.MaxToolRounds = 5
+	}
+	if cfg.MaxContextTurns <= 0 {
+		cfg.MaxContextTurns = 10
+	}
+	if cfg.SummaryTriggerTurns <= 0 {
+		cfg.SummaryTriggerTurns = 8
+	}
+	if cfg.SummaryKeepTurns <= 0 {
+		cfg.SummaryKeepTurns = 4
+	}
+	if cfg.ContextTTL <= 0 {
+		cfg.ContextTTL = 3600
 	}
 	if cfg.MaxResponseChars <= 0 {
 		cfg.MaxResponseChars = 3500
