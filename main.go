@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"setubot/internal/config"
+	"setubot/internal/plugins/agent"
 	"setubot/internal/plugins/draw"
 
 	zero "github.com/wdvxdr1123/ZeroBot"
@@ -16,6 +17,7 @@ func main() {
 		log.Fatalf("读取配置文件失败: %v", err)
 	}
 
+	agent.Register(cfg.Agent)
 	draw.Register(cfg.Draw)
 
 	zero.RunAndBlock(cfg.ToZeroConfig(), nil)

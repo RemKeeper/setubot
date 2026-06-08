@@ -16,6 +16,7 @@ type File struct {
 	SuperUsers    []int64        `json:"superUsers"`
 	Drivers       []DriverConfig `json:"drivers"`
 	Draw          DrawConfig     `json:"draw"`
+	Agent         AgentConfig    `json:"agent"`
 }
 
 type DrawConfig struct {
@@ -26,6 +27,26 @@ type DrawConfig struct {
 	MaxImages   int    `json:"maxImages"`
 	DefaultSize string `json:"defaultSize"`
 	Timeout     int    `json:"timeout"`
+}
+
+type AgentConfig struct {
+	Enabled          bool          `json:"enabled"`
+	BaseURL          string        `json:"baseURL"`
+	APIKey           string        `json:"apiKey"`
+	Model            string        `json:"model"`
+	SystemPrompt     string        `json:"systemPrompt"`
+	SkillDir         string        `json:"skillDir"`
+	MemoryDir        string        `json:"memoryDir"`
+	Timeout          int           `json:"timeout"`
+	MaxToolRounds    int           `json:"maxToolRounds"`
+	MaxResponseChars int           `json:"maxResponseChars"`
+	Temperature      float64       `json:"temperature"`
+	Browser          BrowserConfig `json:"browser"`
+}
+
+type BrowserConfig struct {
+	Enabled bool   `json:"enabled"`
+	BaseURL string `json:"baseURL"`
 }
 
 type DriverConfig struct {
@@ -58,6 +79,7 @@ func LoadFile(path string) (*File, error) {
 	}
 
 	cfg.Draw = cfg.Draw.withDefaults()
+	cfg.Agent = cfg.Agent.withDefaults()
 
 	return &cfg, nil
 }
@@ -77,6 +99,35 @@ func (cfg DrawConfig) withDefaults() DrawConfig {
 	}
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 120
+	}
+
+	return cfg
+}
+
+func (cfg AgentConfig) withDefaults() AgentConfig {
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = "https://api.openai.com"
+	}
+	if cfg.Model == "" {
+		cfg.Model = "gpt-4o-mini"
+	}
+	if cfg.SkillDir == "" {
+		cfg.SkillDir = "skills"
+	}
+	if cfg.MemoryDir == "" {
+		cfg.MemoryDir = "data/memory"
+	}
+	if cfg.Timeout <= 0 {
+		cfg.Timeout = 120
+	}
+	if cfg.MaxToolRounds <= 0 {
+		cfg.MaxToolRounds = 5
+	}
+	if cfg.MaxResponseChars <= 0 {
+		cfg.MaxResponseChars = 3500
+	}
+	if cfg.Browser.BaseURL == "" {
+		cfg.Browser.BaseURL = "http://127.0.0.1:58000"
 	}
 
 	return cfg
