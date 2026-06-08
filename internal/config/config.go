@@ -46,11 +46,20 @@ type AgentConfig struct {
 	MaxResponseChars    int           `json:"maxResponseChars"`
 	Temperature         float64       `json:"temperature"`
 	Browser             BrowserConfig `json:"browser"`
+	Exa                 ExaConfig     `json:"exa"`
 }
 
 type BrowserConfig struct {
 	Enabled bool   `json:"enabled"`
 	BaseURL string `json:"baseURL"`
+}
+
+type ExaConfig struct {
+	Enabled           bool   `json:"enabled"`
+	APIKey            string `json:"apiKey"`
+	BaseURL           string `json:"baseURL"`
+	DefaultType       string `json:"defaultType"`
+	DefaultNumResults int    `json:"defaultNumResults"`
 }
 
 type DriverConfig struct {
@@ -144,6 +153,15 @@ func (cfg AgentConfig) withDefaults() AgentConfig {
 	}
 	if cfg.Browser.BaseURL == "" {
 		cfg.Browser.BaseURL = "http://127.0.0.1:58000"
+	}
+	if cfg.Exa.BaseURL == "" {
+		cfg.Exa.BaseURL = "https://api.exa.ai"
+	}
+	if cfg.Exa.DefaultType == "" {
+		cfg.Exa.DefaultType = "auto"
+	}
+	if cfg.Exa.DefaultNumResults <= 0 {
+		cfg.Exa.DefaultNumResults = 5
 	}
 
 	return cfg

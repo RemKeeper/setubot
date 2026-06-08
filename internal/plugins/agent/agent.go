@@ -160,7 +160,7 @@ func (p *plugin) isHelpText(command string) bool {
 }
 
 func (p *plugin) help(ctx *zero.Ctx) {
-	ctx.Send("Agent 插件命令：\n1. <昵称> <问题>\n2. <昵称> 重置上下文\n3. <昵称> skill 读取 <文件名>\n4. <昵称> memory 写入 <键>: <内容>\n5. <昵称> memory 读取 <键>\n6. <昵称> memory 列表\n浏览器工具由 agent 自动调用：goto/click/type/html/screenshot/evaluate/scroll")
+	ctx.Send("Agent 插件命令：\n1. 群聊：@机器人 <问题>\n2. 私聊：<昵称> <问题>\n3. 重置上下文\n4. skill 读取 <文件名>\n5. memory 写入 <键>: <内容>\n6. memory 读取 <键>\n7. memory 列表\n小红书：来点涩图 / 来N张涩图 / 来点关键词涩图 / 不喜欢\n浏览器工具由 agent 自动调用：goto/click/type/html/screenshot/evaluate/scroll")
 }
 
 func (p *plugin) agentCommand(ctx *zero.Ctx, prompt string) {
@@ -231,7 +231,7 @@ func (p *plugin) runAgent(ctx *zero.Ctx, prompt string) (string, error) {
 		}
 
 		for _, call := range msg.ToolCalls {
-			result := p.callTool(call.Function.Name, call.Function.Arguments)
+			result := p.callTool(ctx, call.Function.Name, call.Function.Arguments)
 			toolMessage := chatMessage{
 				Role:       openai.ChatMessageRoleTool,
 				ToolCallID: call.ID,
@@ -496,7 +496,7 @@ func (p *plugin) listMemory(ctx *zero.Ctx) {
 	ctx.Send("记忆列表：\n" + strings.Join(names, "\n"))
 }
 
-func (p *plugin) callTool(name string, rawArgs string) string {
+func (p *plugin) callTool(ctx *zero.Ctx, name string, rawArgs string) string {
 	var args map[string]interface{}
 	if rawArgs != "" {
 		if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
@@ -513,6 +513,15 @@ func (p *plugin) callTool(name string, rawArgs string) string {
 		return toolResult("已写入记忆", err)
 	case "read_memory":
 		content, err := p.readMemoryFile(stringArg(args, "key"))
+		return toolResult(content, err)
+	case "xhs_setu":
+		content, err := p.runXHSSetu(ctx, args)
+		return toolResult(content, err)
+	case "xhs_dislike":
+		content, err := p.runXHSDislike(ctx, args)
+		return toolResult(content, err)
+	case "exa_search":
+		content, err := p.callExaSearch(args)
 		return toolResult(content, err)
 	case "browser_goto", "browser_click", "browser_type", "browser_html", "browser_screenshot", "browser_evaluate", "browser_scroll":
 		content, err := p.callBrowser(name, args)

@@ -109,6 +109,25 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 				}, []string{"key"}),
 			},
 		},
+		functionTool("xhs_setu", "执行小红书涩图脚本，自动按标题/tag筛选、点赞收藏并把图片发送到当前聊天；关键词搜索会按会话去重，多图会用合并转发避免刷屏。", map[string]interface{}{
+			"count":   numberSchema("要处理的帖子数量，默认 1，最大 5"),
+			"scroll":  numberSchema("推荐页滚动次数，默认 2，最大 10"),
+			"keyword": stringSchema("可选搜索关键词；为空时使用推荐页"),
+		}, []string{}),
+		functionTool("xhs_dislike", "撤销最近一次小红书帖子的点赞和收藏；可选把关键词加入负面列表。", map[string]interface{}{
+			"keyword": stringSchema("可选负面关键词，只有用户明确要求以后别推某类内容时填写"),
+		}, []string{}),
+	}
+	if p.cfg.Exa.Enabled {
+		tools = append(tools, functionTool("exa_search", "使用 Exa.ai 搜索互联网，返回标题、URL、发布时间、作者和 highlights 摘要。适合查询实时信息、网页资料和需要来源的问题。", map[string]interface{}{
+			"query":           stringSchema("搜索查询，使用自然语言描述要找的信息"),
+			"type":            enumSchema("搜索类型，默认使用配置值", []string{"auto", "fast", "instant", "deep-lite", "deep", "deep-reasoning"}),
+			"num_results":     numberSchema("返回结果数量，默认使用配置值，范围 1-10"),
+			"category":        stringSchema("可选分类，如 news、research paper、company、people、personal site、financial report"),
+			"include_domains": arrayStringSchema("可选，仅包含这些域名"),
+			"exclude_domains": arrayStringSchema("可选，排除这些域名；company/people 分类不要使用"),
+			"live":            boolSchema("是否强制实时抓取。true 会设置 contents.maxAgeHours=0，可能更慢"),
+		}, []string{"query"}))
 	}
 
 	if !p.cfg.Browser.Enabled {
@@ -158,6 +177,10 @@ func numberSchema(description string) map[string]interface{} {
 
 func boolSchema(description string) map[string]interface{} {
 	return map[string]interface{}{"type": "boolean", "description": description}
+}
+
+func arrayStringSchema(description string) map[string]interface{} {
+	return map[string]interface{}{"type": "array", "description": description, "items": map[string]interface{}{"type": "string"}}
 }
 
 func enumSchema(description string, values []string) map[string]interface{} {
