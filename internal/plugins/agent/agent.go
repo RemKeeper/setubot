@@ -61,11 +61,7 @@ func Register(cfg config.AgentConfig, nickNames []string) {
 		log.Printf("[agent] 初始化目录失败: %v", err)
 	}
 
-	if len(p.nickNames) == 0 {
-		log.Printf("[agent] 未配置 nickName，跳过前缀触发器注册")
-		return
-	}
-	zero.OnPrefixGroup(p.nickNames).Handle(p.dispatch)
+	zero.OnMessage(zero.OnlyToMe).Handle(p.dispatch)
 }
 
 func openAIBaseURL(baseURL string) string {
@@ -121,7 +117,7 @@ func (p *plugin) extractNickCommand(text string) (string, bool) {
 }
 
 func (p *plugin) dispatch(ctx *zero.Ctx) {
-	command, ok := p.extractNickCommand(ctx.ExtractPlainText())
+	command, ok := p.extractCommand(ctx)
 	if !ok {
 		return
 	}
@@ -142,6 +138,16 @@ func (p *plugin) dispatch(ctx *zero.Ctx) {
 	default:
 		p.agentCommand(ctx, command)
 	}
+}
+
+func (p *plugin) extractCommand(ctx *zero.Ctx) (string, bool) {
+	text := strings.TrimSpace(ctx.ExtractPlainText())
+	if ctx.Event.GroupID != 0 {
+		command := strings.TrimLeft(text, " \t\r\n,，:：")
+		return command, command != ""
+	}
+
+	return p.extractNickCommand(text)
 }
 
 func (p *plugin) isHelpText(command string) bool {
