@@ -61,13 +61,11 @@ func Register(cfg config.AgentConfig, nickNames []string) {
 		log.Printf("[agent] 初始化目录失败: %v", err)
 	}
 
-	zero.OnMessage(p.isHelpCommand).Handle(p.help)
-	zero.OnMessage(p.isResetContextCommand).Handle(p.resetContext)
-	zero.OnMessage(p.isSkillCommand).Handle(p.readSkill)
-	zero.OnMessage(p.isMemoryWriteCommand).Handle(p.writeMemory)
-	zero.OnMessage(p.isMemoryReadCommand).Handle(p.readMemory)
-	zero.OnMessage(p.isMemoryListCommand).Handle(p.listMemory)
-	zero.OnMessage(p.isAgentCommand).Handle(p.agent)
+	if len(p.nickNames) == 0 {
+		log.Printf("[agent] 未配置 nickName，跳过前缀触发器注册")
+		return
+	}
+	zero.OnPrefixGroup(p.nickNames).Handle(p.dispatch)
 }
 
 func openAIBaseURL(baseURL string) string {
@@ -122,48 +120,28 @@ func (p *plugin) extractNickCommand(text string) (string, bool) {
 	return "", false
 }
 
-func (p *plugin) isAgentCommand(ctx *zero.Ctx) bool {
+func (p *plugin) dispatch(ctx *zero.Ctx) {
 	command, ok := p.extractNickCommand(ctx.ExtractPlainText())
 	if !ok {
-		return false
+		return
 	}
 
-	return !p.isHelpText(command) &&
-		!resetContextPattern.MatchString(command) &&
-		!skillReadPattern.MatchString(command) &&
-		!memoryWritePattern.MatchString(command) &&
-		!memoryReadPattern.MatchString(command) &&
-		!memoryListPattern.MatchString(command)
-}
-
-func (p *plugin) isSkillCommand(ctx *zero.Ctx) bool {
-	command, ok := p.extractNickCommand(ctx.ExtractPlainText())
-	return ok && skillReadPattern.MatchString(command)
-}
-
-func (p *plugin) isMemoryWriteCommand(ctx *zero.Ctx) bool {
-	command, ok := p.extractNickCommand(ctx.ExtractPlainText())
-	return ok && memoryWritePattern.MatchString(command)
-}
-
-func (p *plugin) isMemoryReadCommand(ctx *zero.Ctx) bool {
-	command, ok := p.extractNickCommand(ctx.ExtractPlainText())
-	return ok && memoryReadPattern.MatchString(command)
-}
-
-func (p *plugin) isMemoryListCommand(ctx *zero.Ctx) bool {
-	command, ok := p.extractNickCommand(ctx.ExtractPlainText())
-	return ok && memoryListPattern.MatchString(command)
-}
-
-func (p *plugin) isHelpCommand(ctx *zero.Ctx) bool {
-	command, ok := p.extractNickCommand(ctx.ExtractPlainText())
-	return ok && p.isHelpText(command)
-}
-
-func (p *plugin) isResetContextCommand(ctx *zero.Ctx) bool {
-	command, ok := p.extractNickCommand(ctx.ExtractPlainText())
-	return ok && resetContextPattern.MatchString(command)
+	switch {
+	case p.isHelpText(command):
+		p.help(ctx)
+	case resetContextPattern.MatchString(command):
+		p.resetContext(ctx)
+	case skillReadPattern.MatchString(command):
+		p.readSkillCommand(ctx, command)
+	case memoryWritePattern.MatchString(command):
+		p.writeMemoryCommand(ctx, command)
+	case memoryReadPattern.MatchString(command):
+		p.readMemoryCommand(ctx, command)
+	case memoryListPattern.MatchString(command):
+		p.listMemory(ctx)
+	default:
+		p.agentCommand(ctx, command)
+	}
 }
 
 func (p *plugin) isHelpText(command string) bool {
@@ -179,7 +157,7 @@ func (p *plugin) help(ctx *zero.Ctx) {
 	ctx.Send("Agent 插件命令：\n1. <昵称> <问题>\n2. <昵称> 重置上下文\n3. <昵称> skill 读取 <文件名>\n4. <昵称> memory 写入 <键>: <内容>\n5. <昵称> memory 读取 <键>\n6. <昵称> memory 列表\n浏览器工具由 agent 自动调用：goto/click/type/html/screenshot/evaluate/scroll")
 }
 
-func (p *plugin) agent(ctx *zero.Ctx) {
+func (p *plugin) agentCommand(ctx *zero.Ctx, prompt string) {
 	if !p.cfg.Enabled {
 		ctx.Send("Agent 功能未启用")
 		return
@@ -188,9 +166,7 @@ func (p *plugin) agent(ctx *zero.Ctx) {
 		ctx.Send("Agent 接口 API Key 未配置")
 		return
 	}
-
-	prompt, ok := p.extractNickCommand(ctx.ExtractPlainText())
-	if !ok || strings.TrimSpace(prompt) == "" {
+	if strings.TrimSpace(prompt) == "" {
 		ctx.Send("请输入 agent 问题")
 		return
 	}
@@ -448,14 +424,9 @@ func (p *plugin) chat(messages []chatMessage) (*openai.ChatCompletionResponse, e
 	return &resp, nil
 }
 
-func (p *plugin) readSkill(ctx *zero.Ctx) {
+func (p *plugin) readSkillCommand(ctx *zero.Ctx, command string) {
 	if !p.cfg.Enabled {
 		ctx.Send("Agent 功能未启用")
-		return
-	}
-	command, ok := p.extractNickCommand(ctx.ExtractPlainText())
-	if !ok {
-		ctx.Send("请输入 skill 读取命令")
 		return
 	}
 	matches := skillReadPattern.FindStringSubmatch(command)
@@ -471,14 +442,9 @@ func (p *plugin) readSkill(ctx *zero.Ctx) {
 	ctx.Send(truncate(content, p.cfg.MaxResponseChars))
 }
 
-func (p *plugin) writeMemory(ctx *zero.Ctx) {
+func (p *plugin) writeMemoryCommand(ctx *zero.Ctx, command string) {
 	if !p.cfg.Enabled {
 		ctx.Send("Agent 功能未启用")
-		return
-	}
-	command, ok := p.extractNickCommand(ctx.ExtractPlainText())
-	if !ok {
-		ctx.Send("请输入 memory 写入命令")
 		return
 	}
 	matches := memoryWritePattern.FindStringSubmatch(command)
@@ -493,14 +459,9 @@ func (p *plugin) writeMemory(ctx *zero.Ctx) {
 	ctx.Send("已写入记忆")
 }
 
-func (p *plugin) readMemory(ctx *zero.Ctx) {
+func (p *plugin) readMemoryCommand(ctx *zero.Ctx, command string) {
 	if !p.cfg.Enabled {
 		ctx.Send("Agent 功能未启用")
-		return
-	}
-	command, ok := p.extractNickCommand(ctx.ExtractPlainText())
-	if !ok {
-		ctx.Send("请输入 memory 读取命令")
 		return
 	}
 	matches := memoryReadPattern.FindStringSubmatch(command)
