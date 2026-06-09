@@ -129,26 +129,39 @@ def api_js_click(selector: str):
       const selector = {json.dumps(selector)};
       const el = document.querySelector(selector);
       if (!el) return {{status: 'missing', selector}};
-      const rect = el.getBoundingClientRect();
       const before = {{
         className: String(el.className || ''),
         text: el.innerText || '',
-        useHref: el.querySelector('use')?.getAttribute('xlink:href') || ''
+                useHref: el.querySelector('use')?.getAttribute('xlink:href') || el.querySelector('use')?.getAttribute('href') || ''
       }};
       el.scrollIntoView({{block: 'center', inline: 'center'}});
-      ['mouseover', 'mousedown', 'mouseup', 'click'].forEach(type => {{
-        el.dispatchEvent(new MouseEvent(type, {{
+            const rect = el.getBoundingClientRect();
+            const x = rect.left + rect.width / 2;
+            const y = rect.top + rect.height / 2;
+            ['pointerover', 'pointerdown', 'pointerup'].forEach(type => {{
+                el.dispatchEvent(new PointerEvent(type, {{
+                    bubbles: true,
+                    cancelable: true,
+                    view: window,
+                    clientX: x,
+                    clientY: y,
+                    pointerType: 'mouse',
+                    isPrimary: true
+                }}));
+            }});
+            ['mouseover', 'mousedown', 'mouseup', 'click'].forEach(type => {{
+                el.dispatchEvent(new MouseEvent(type, {{
           bubbles: true,
           cancelable: true,
           view: window,
-          clientX: rect.left + rect.width / 2,
-          clientY: rect.top + rect.height / 2
+                    clientX: x,
+                    clientY: y
         }}));
       }});
       const after = {{
         className: String(el.className || ''),
         text: el.innerText || '',
-        useHref: el.querySelector('use')?.getAttribute('xlink:href') || ''
+                useHref: el.querySelector('use')?.getAttribute('xlink:href') || el.querySelector('use')?.getAttribute('href') || ''
       }};
       return {{status: 'success', selector, before, after}};
     }})()
@@ -189,7 +202,7 @@ def get_engage_state(selector: str):
         className: String(el.className || ''),
         text: el.innerText || '',
         visible: !!(rect.width && rect.height),
-        useHref: el.querySelector('use')?.getAttribute('xlink:href') || '',
+                useHref: el.querySelector('use')?.getAttribute('xlink:href') || el.querySelector('use')?.getAttribute('href') || '',
         html: el.outerHTML.slice(0, 500)
       }};
     }})()
@@ -201,7 +214,7 @@ def get_engage_state(selector: str):
 
 
 def is_liked_state(state: dict) -> bool:
-    return "like-active" in (state.get("className") or "")
+    return "#liked" in (state.get("useHref") or "")
 
 
 def is_collected_state(state: dict) -> bool:
@@ -225,6 +238,14 @@ def ensure_engage(selector: str, is_active_fn, label: str):
 
     after = get_engage_state(selector)
     ok = is_active_fn(after)
+    if not ok and clicked.get("method") == "api":
+        print(f"  {label} /api/click 后状态未变化，尝试 JS 事件兜底", file=sys.stderr)
+        js_clicked = api_js_click(selector)
+        if js_clicked and js_clicked.get("status") == "success":
+            clicked = {"status": "success", "method": "api+js", "raw": js_clicked}
+            wait(1)
+            after = get_engage_state(selector)
+            ok = is_active_fn(after)
     print(
         f"  {label}点击({clicked.get('method')}): "
         f"before={before.get('className')}/{before.get('useHref')}/{before.get('text')} "
@@ -694,9 +715,9 @@ def match_note_tags(tags: list[dict]) -> dict:
 #  帖子处理（共用）
 # ══════════════════════════════════════════════════════════════════════
 
-def process_one_post(post: dict) -> dict:
+def process_one_post(post: dict, require_positive_tag: bool = False) -> dict:
     """
-    处理单个帖子：打开 → 检测视频 → 点赞 → 收藏 → 提取图片
+    处理单个帖子：打开 → 提取/校验tag → 检测视频 → 点赞 → 收藏 → 提取图片
     返回 {"title": ..., "url": ..., "images": [...], "liked": bool, "collected": bool}
     """
     result = {
@@ -736,6 +757,12 @@ def process_one_post(post: dict) -> dict:
             print(f"  ⏭️ 命中负向tag，跳过", file=sys.stderr)
             result["skipped"] = True
             result["skip_reason"] = "negative_tag"
+            return result
+
+        if require_positive_tag and tag_matches.get("score_bonus", 0) <= 0:
+            print(f"  ⏭️ 未命中正向tag，跳过", file=sys.stderr)
+            result["skipped"] = True
+            result["skip_reason"] = "positive_tag_miss"
             return result
 
         # 3. 检测视频帖
@@ -900,7 +927,7 @@ def main():
         post = pending.pop(0)
         processed_count_display = processed_count + 1
         print(f"\n🎯 [{processed_count_display}/{count}] 处理: {post['title'][:40]}...", file=sys.stderr)
-        result = process_one_post(post)
+        result = process_one_post(post, require_positive_tag=True)
 
         if result.get("skipped"):
             if candidate_queue:

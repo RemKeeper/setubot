@@ -61,7 +61,15 @@ func Register(cfg config.AgentConfig, nickNames []string) {
 		log.Printf("[agent] 初始化目录失败: %v", err)
 	}
 
-	zero.OnMessage(zero.OnlyToMe).Handle(p.dispatch)
+	zero.OnMessage(p.isTriggerMessage).Handle(p.dispatch)
+}
+
+func (p *plugin) isTriggerMessage(ctx *zero.Ctx) bool {
+	if ctx.Event.GroupID != 0 {
+		return zero.OnlyToMe(ctx)
+	}
+
+	return strings.TrimSpace(ctx.ExtractPlainText()) != ""
 }
 
 func openAIBaseURL(baseURL string) string {
@@ -147,7 +155,7 @@ func (p *plugin) extractCommand(ctx *zero.Ctx) (string, bool) {
 		return command, command != ""
 	}
 
-	return p.extractNickCommand(text)
+	return text, text != ""
 }
 
 func (p *plugin) isHelpText(command string) bool {
@@ -160,7 +168,7 @@ func (p *plugin) isHelpText(command string) bool {
 }
 
 func (p *plugin) help(ctx *zero.Ctx) {
-	ctx.Send("Agent 插件命令：\n1. 群聊：@机器人 <问题>\n2. 私聊：<昵称> <问题>\n3. 重置上下文\n4. skill 读取 <文件名>\n5. memory 写入 <键>: <内容>\n6. memory 读取 <键>\n7. memory 列表\n小红书：来点涩图 / 来N张涩图 / 来点关键词涩图 / 不喜欢\n浏览器工具由 agent 自动调用：goto/click/type/html/screenshot/evaluate/scroll")
+	ctx.Send("Agent 插件命令：\n1. 群聊：@机器人 <问题>\n2. 私聊：直接发送 <问题>\n3. 重置上下文\n4. skill 读取 <文件名>\n5. memory 写入 <键>: <内容>\n6. memory 读取 <键>\n7. memory 列表\n小红书：来点涩图 / 来N张涩图 / 来点关键词涩图 / 不喜欢\n浏览器工具由 agent 自动调用：goto/click/type/html/screenshot/evaluate/scroll")
 }
 
 func (p *plugin) agentCommand(ctx *zero.Ctx, prompt string) {
