@@ -17,7 +17,7 @@ func main() {
 		log.Fatalf("读取配置文件失败: %v", err)
 	}
 
-	agent.Register(cfg.Agent, cfg.NickName)
+	agent.Register(cfg.Agent, cfg.NickName, cfg.SuperUsers)
 	draw.Register(cfg.Draw)
 
 	zero.RunAndBlock(cfg.ToZeroConfig(), nil)

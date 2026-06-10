@@ -1,0 +1,66 @@
+{
+  "nickName": ["机器人昵称"],
+  "commandPrefix": "/",
+  "superUsers": [123456789],
+  "drivers": [
+    {
+      "type": "ws-client",
+      "url": "ws://127.0.0.1:11451",
+      "accessToken": "替换为你的 OneBot access token；未设置则留空"
+    }
+  ],
+  "draw": {
+    "enabled": false,
+    "baseURL": "https://api.openai.com",
+    "apiKey": "替换为你的图像模型 API Key；不用绘图可留空",
+    "model": "gpt-image-1",
+    "maxImages": 3,
+    "defaultSize": "1024x1024",
+    "timeout": 120
+  },
+  "agent": {
+    "enabled": true,
+    "baseURL": "https://api.openai.com",
+    "apiKey": "替换为你的 OpenAI 兼容 API Key",
+    "model": "gpt-4o-mini",
+    "systemPrompt": "你是一个简洁可靠的中文 AI 助手。必要时可以调用工具读取 skill、搜索/读写记忆、控制浏览器。",
+    "skillDir": "skills",
+    "memoryDir": "data/memory",
+    "timeout": 120,
+    "maxToolRounds": 20,
+    "maxContextTurns": 10,
+    "summaryTriggerTurns": 8,
+    "summaryKeepTurns": 4,
+    "contextTTL": 3600,
+    "maxResponseChars": 3500,
+    "temperature": 0.5,
+    "debug": false,
+    "debugLogPath": "data/agent_api_body.log",
+    "browser": {
+      "enabled": false,
+      "baseURL": "http://127.0.0.1:58000"
+    },
+    "exa": {
+      "enabled": false,
+      "apiKey": "替换为你的 Exa API Key；不用联网搜索可留空",
+      "baseURL": "https://api.exa.ai",
+      "defaultType": "auto",
+      "defaultNumResults": 5
+    },
+    "ehTag": {
+      "enabled": false,
+      "sourceURL": "https://fastly.jsdelivr.net/gh/EhTagTranslation/DatabaseReleases/db.html.json",
+      "cachePath": "data/eh_tag_db.html.json"
+    },
+    "ehReq": {
+      "enabled": false,
+      "cookie": "",
+      "cookieEnv": "EHENTAI_COOKIE",
+      "cookiePath": ".secrets/ehentai.cookies",
+      "proxyURL": "",
+      "proxyEnv": "EHENTAI_PROXY",
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
+      "maxBodyChars": 200000
+    }
+  }
+}

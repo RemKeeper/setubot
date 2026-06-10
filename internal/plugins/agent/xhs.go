@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,6 +67,9 @@ func (p *plugin) runXHSSetu(ctx *zero.Ctx, args map[string]interface{}) (string,
 	if args != nil && args["scroll"] != nil {
 		scroll := clamp(numberArg(args, "scroll", 0), 1, 10)
 		cmdArgs = append(cmdArgs, "--scroll", fmt.Sprint(scroll))
+	}
+	if boolArg(args, "skip_engage", false) {
+		cmdArgs = append(cmdArgs, "--skip-engage")
 	}
 	if keyword != "" {
 		cmdArgs = append(cmdArgs, "--keyword", keyword)
@@ -168,33 +172,84 @@ func collectXHSImages(results []xhsSetuResult, limit int) []string {
 }
 
 func (p *plugin) sendXHSImages(ctx *zero.Ctx, results []xhsSetuResult, images []string) {
-	if len(images) == 1 {
-		ctx.Send(message.Image(images[0]))
-		return
-	}
-
-	nodes := make(message.Message, 0, len(images)+len(results))
-	botName := "setubot"
-	if len(p.nickNames) > 0 {
-		botName = p.nickNames[0]
-	}
+	nodes := make(message.Message, 0, len(results))
 	for _, result := range results {
 		title := strings.TrimSpace(result.Title)
 		if title != "" {
-			nodes = append(nodes, message.CustomNode(botName, ctx.Event.SelfID, title))
+			nodes = append(nodes, p.forwardNode(ctx, title))
 		}
 		if len(result.Tags) > 0 {
-			nodes = append(nodes, message.CustomNode(botName, ctx.Event.SelfID, "Tags: #"+strings.Join(result.Tags, " #")))
+			nodes = append(nodes, p.forwardNode(ctx, "Tags: #"+strings.Join(result.Tags, " #")))
 		}
 	}
+	if err := p.sendForwardImages(ctx, images, nodes); err != nil {
+		log.Printf("[agent/xhs] 合并发送图片失败: %v", err)
+	}
+}
+
+func (p *plugin) callSendForwardImages(ctx *zero.Ctx, args map[string]interface{}) (string, error) {
+	images := stringSliceArg(args, "images")
+	if err := p.sendForwardImages(ctx, images, nil); err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("已合并发送 %d 张图片", len(cleanImageURLs(images, maxXHSImages))), nil
+}
+
+func (p *plugin) sendForwardImages(ctx *zero.Ctx, images []string, prefixNodes message.Message) error {
+	images = cleanImageURLs(images, maxXHSImages)
+	if len(images) == 0 {
+		return fmt.Errorf("图片链接不能为空")
+	}
+
+	if len(images) == 1 && len(prefixNodes) == 0 {
+		msg := message.Image(images[0])
+		log.Printf("[agent/forward_images] 单图发送: sender=%d 类型=%T 内容=%+v", ctx.Event.UserID, msg, msg)
+		ctx.Send(msg)
+		return nil
+	}
+
+	nodes := make(message.Message, 0, len(prefixNodes)+len(images))
+	nodes = append(nodes, prefixNodes...)
 	for _, imageURL := range images {
-		nodes = append(nodes, message.CustomNode(botName, ctx.Event.SelfID, message.Message{message.Image(imageURL)}))
-		if len(nodes) >= maxXHSImages+len(results) {
-			ctx.Send(nodes)
-			return
+		nodes = append(nodes, p.forwardNode(ctx, message.Message{message.Image(imageURL)}))
+	}
+
+	log.Printf("[agent/forward_images] 合并转发发送: sender=%d 节点数=%d 类型=%T", ctx.Event.UserID, len(nodes), nodes)
+	ctx.Send(nodes)
+	return nil
+}
+
+func (p *plugin) forwardNode(ctx *zero.Ctx, content interface{}) message.Segment {
+	return message.CustomNode(forwardSenderName(ctx), ctx.Event.UserID, content)
+}
+
+func forwardSenderName(ctx *zero.Ctx) string {
+	if ctx.Event.Sender != nil {
+		return ctx.Event.Sender.Name()
+	}
+	return fmt.Sprint(ctx.Event.UserID)
+}
+
+func cleanImageURLs(images []string, limit int) []string {
+	seen := make(map[string]struct{}, len(images))
+	cleaned := make([]string, 0, len(images))
+	for _, imageURL := range images {
+		imageURL = strings.TrimSpace(imageURL)
+		if imageURL == "" {
+			continue
+		}
+		if _, ok := seen[imageURL]; ok {
+			continue
+		}
+		seen[imageURL] = struct{}{}
+		cleaned = append(cleaned, imageURL)
+		if limit > 0 && len(cleaned) >= limit {
+			break
 		}
 	}
-	ctx.Send(nodes)
+
+	return cleaned
 }
 
 func (p *plugin) saveXHSLast(ctx *zero.Ctx, results []xhsSetuResult) error {

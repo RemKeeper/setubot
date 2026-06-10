@@ -32,8 +32,11 @@ var (
 type plugin struct {
 	cfg        config.AgentConfig
 	nickNames  []string
+	superUsers []int64
 	aiClient   *openai.Client
 	httpClient *http.Client
+	memory     *MemoryStore
+	ehTags     *ehTagStore
 	sessions   map[string]*conversationSession
 	sessionM   sync.Mutex
 }
@@ -46,19 +49,42 @@ type conversationSession struct {
 
 type chatMessage = openai.ChatCompletionMessage
 
-func Register(cfg config.AgentConfig, nickNames []string) {
+func Register(cfg config.AgentConfig, nickNames []string, superUsers []int64) {
 	aiConfig := openai.DefaultConfig(cfg.APIKey)
 	aiConfig.BaseURL = openAIBaseURL(cfg.BaseURL)
 
 	p := &plugin{
 		cfg:        cfg,
 		nickNames:  normalizeNickNames(nickNames),
+		superUsers: append([]int64(nil), superUsers...),
 		aiClient:   openai.NewClientWithConfig(aiConfig),
 		httpClient: &http.Client{Timeout: time.Duration(cfg.Timeout) * time.Second},
 		sessions:   make(map[string]*conversationSession),
 	}
+	p.ehTags = newEHTagStore(ehTagRuntimeConfig{
+		Enabled:   cfg.EHTag.Enabled,
+		SourceURL: cfg.EHTag.SourceURL,
+		CachePath: cfg.EHTag.CachePath,
+	}, p.httpClient)
 	if err := p.ensureStorageDirs(); err != nil {
 		log.Printf("[agent] 初始化目录失败: %v", err)
+	}
+	if store, err := NewMemoryStore(cfg.MemoryDir); err != nil {
+		log.Printf("[agent] 初始化记忆索引失败，将退回文件读取: %v", err)
+	} else {
+		p.memory = store
+		if err := p.memory.Rebuild(); err != nil {
+			log.Printf("[agent] 重建记忆索引失败: %v", err)
+		}
+	}
+	if p.ehTags != nil && cfg.EHTag.Enabled {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.Timeout)*time.Second)
+			defer cancel()
+			if err := p.ehTags.Load(ctx, false); err != nil {
+				log.Printf("[agent/eh_tag] 初始化标签数据库失败: %v", err)
+			}
+		}()
 	}
 
 	zero.OnMessage(p.isTriggerMessage).Handle(p.dispatch)
@@ -195,7 +221,9 @@ func (p *plugin) agentCommand(ctx *zero.Ctx, prompt string) {
 		return
 	}
 
-	ctx.Send(truncate(answer, p.cfg.MaxResponseChars))
+	finalMsg := truncate(answer, p.cfg.MaxResponseChars)
+	log.Printf("[agent] 发送消息体类型=%T 内容=%q", finalMsg, truncateRunes(finalMsg, 500))
+	ctx.Send(finalMsg)
 }
 
 func (p *plugin) resetContext(ctx *zero.Ctx) {
@@ -204,18 +232,19 @@ func (p *plugin) resetContext(ctx *zero.Ctx) {
 }
 
 func (p *plugin) runAgent(ctx *zero.Ctx, prompt string) (string, error) {
-	memories, _ := p.readAllMemories()
+	memories, _ := p.SearchMemory(prompt, 5)
 	skills, _ := p.listSkillNames()
 	system := p.cfg.SystemPrompt
 	if system == "" {
-		system = "你是一个简洁可靠的中文 AI 助手。必要时可以调用工具读取 skill、读写记忆、控制浏览器。"
+		system = "你是一个简洁可靠的中文 AI 助手。必要时可以调用工具读取 skill、搜索/读写记忆、控制浏览器。"
 	}
 	if len(skills) > 0 {
 		system += "\n可用 skills：" + strings.Join(skills, ", ")
 	}
 	if strings.TrimSpace(memories) != "" {
-		system += "\n已保存记忆：\n" + memories
+		system += "\n与当前问题最相关的已保存记忆（来自 MemoryStore/SearchMemory 检索，不代表全部记忆）：\n" + memories
 	}
+	system += p.requestIdentityContext(ctx)
 
 	sessionKey := p.sessionKey(ctx)
 	turnMessages := []chatMessage{{Role: openai.ChatMessageRoleUser, Content: prompt}}
@@ -230,7 +259,7 @@ func (p *plugin) runAgent(ctx *zero.Ctx, prompt string) (string, error) {
 			return "", fmt.Errorf("模型未返回结果")
 		}
 
-		msg := resp.Choices[0].Message
+		msg := normalizeChatMessage(resp.Choices[0].Message)
 		messages = append(messages, msg)
 		turnMessages = append(turnMessages, msg)
 		if len(msg.ToolCalls) == 0 {
@@ -261,6 +290,68 @@ func (p *plugin) sessionKey(ctx *zero.Ctx) string {
 	return fmt.Sprintf("private:%d", ctx.Event.UserID)
 }
 
+func (p *plugin) requestIdentityContext(ctx *zero.Ctx) string {
+	userName := requestUserName(ctx)
+	role := "普通用户"
+	if p.isSuperUser(ctx.Event.UserID) {
+		role = "主人/superUser"
+	}
+
+	var b strings.Builder
+	b.WriteString("\n当前请求身份上下文：")
+	if ctx.Event.GroupID != 0 {
+		fmt.Fprintf(&b, "\n- 聊天类型：群聊")
+		fmt.Fprintf(&b, "\n- 群号：%d", ctx.Event.GroupID)
+		fmt.Fprintf(&b, "\n- 当前发问用户昵称：%s", userName)
+		fmt.Fprintf(&b, "\n- 当前发问用户 ID：%d", ctx.Event.UserID)
+		fmt.Fprintf(&b, "\n- 当前发问用户身份：%s", role)
+		b.WriteString("\n- 群聊中不同用户的问题必须按昵称和 ID 区分，不要把不同用户的偏好、记忆或指令混为同一个人。")
+	} else {
+		fmt.Fprintf(&b, "\n- 聊天类型：私聊")
+		fmt.Fprintf(&b, "\n- 当前用户昵称：%s", userName)
+		fmt.Fprintf(&b, "\n- 当前用户 ID：%d", ctx.Event.UserID)
+		fmt.Fprintf(&b, "\n- 当前用户身份：%s", role)
+	}
+	if len(p.superUsers) > 0 {
+		fmt.Fprintf(&b, "\n- 主人/superUsers ID 列表：%s", formatInt64List(p.superUsers))
+		b.WriteString("\n- 只有当前发问用户 ID 位于主人列表时，才应把该用户识别为主人。")
+	} else {
+		b.WriteString("\n- 主人/superUsers ID 列表：未配置")
+	}
+
+	return b.String()
+}
+
+func requestUserName(ctx *zero.Ctx) string {
+	if ctx.Event.Sender != nil {
+		name := strings.TrimSpace(ctx.Event.Sender.Name())
+		if name != "" {
+			return name
+		}
+	}
+
+	return fmt.Sprint(ctx.Event.UserID)
+}
+
+func (p *plugin) isSuperUser(userID int64) bool {
+	for _, superUser := range p.superUsers {
+		if superUser == userID {
+			return true
+		}
+	}
+
+	return false
+}
+
+func formatInt64List(values []int64) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, fmt.Sprint(value))
+	}
+
+	return strings.Join(parts, ", ")
+}
+
 func (p *plugin) buildMessages(system string, sessionKey string, turnMessages []chatMessage) []chatMessage {
 	summary, history := p.sessionHistory(sessionKey)
 	messages := make([]chatMessage, 0, 2+len(history)+len(turnMessages))
@@ -268,8 +359,8 @@ func (p *plugin) buildMessages(system string, sessionKey string, turnMessages []
 	if strings.TrimSpace(summary) != "" {
 		messages = append(messages, chatMessage{Role: openai.ChatMessageRoleSystem, Content: "以下是较早对话的压缩摘要，请作为长期上下文参考：\n" + summary})
 	}
-	messages = append(messages, history...)
-	messages = append(messages, turnMessages...)
+	messages = append(messages, normalizeChatMessages(history)...)
+	messages = append(messages, normalizeChatMessages(turnMessages)...)
 
 	return messages
 }
@@ -287,7 +378,7 @@ func (p *plugin) sessionHistory(sessionKey string) (string, []chatMessage) {
 		return "", nil
 	}
 
-	return session.summary, append([]chatMessage(nil), session.messages...)
+	return session.summary, normalizeChatMessages(sanitizeToolMessagePairs(append([]chatMessage(nil), session.messages...)))
 }
 
 func (p *plugin) appendSession(sessionKey string, messages []chatMessage) {
@@ -301,7 +392,7 @@ func (p *plugin) appendSession(sessionKey string, messages []chatMessage) {
 	session.updatedAt = time.Now()
 	shouldSummarize := shouldSummarizeContext(session.messages, p.cfg.SummaryTriggerTurns)
 	if !shouldSummarize {
-		session.messages = trimContextMessages(session.messages, p.cfg.MaxContextTurns)
+		session.messages = normalizeChatMessages(sanitizeToolMessagePairs(trimContextMessages(session.messages, p.cfg.MaxContextTurns)))
 	}
 	p.sessionM.Unlock()
 
@@ -334,7 +425,7 @@ func (p *plugin) summarizeSession(sessionKey string) {
 		return
 	}
 	oldMessages := append([]chatMessage(nil), session.messages[:len(session.messages)-keepMessages]...)
-	recentMessages := append([]chatMessage(nil), session.messages[len(session.messages)-keepMessages:]...)
+	recentMessages := normalizeChatMessages(sanitizeToolMessagePairs(append([]chatMessage(nil), session.messages[len(session.messages)-keepMessages:]...)))
 	previousSummary := session.summary
 	p.sessionM.Unlock()
 
@@ -343,7 +434,7 @@ func (p *plugin) summarizeSession(sessionKey string) {
 		log.Printf("[agent] 总结上下文失败: %v", err)
 		p.sessionM.Lock()
 		if session, ok := p.sessions[sessionKey]; ok {
-			session.messages = trimContextMessages(session.messages, p.cfg.MaxContextTurns)
+			session.messages = normalizeChatMessages(sanitizeToolMessagePairs(trimContextMessages(session.messages, p.cfg.MaxContextTurns)))
 		}
 		p.sessionM.Unlock()
 		return
@@ -365,11 +456,13 @@ func (p *plugin) summarizeContext(previousSummary string, messages []chatMessage
 	}
 	content += "\n\n待压缩对话：\n" + renderMessagesForSummary(messages)
 
-	resp, err := p.aiClient.CreateChatCompletion(context.Background(), openai.ChatCompletionRequest{
+	req := openai.ChatCompletionRequest{
 		Model:       p.cfg.Model,
 		Messages:    []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: content}},
 		Temperature: 0.2,
-	})
+	}
+	p.debugLogChatRequest("summarize_context", req)
+	resp, err := p.aiClient.CreateChatCompletion(context.Background(), req)
 	if err != nil {
 		return "", err
 	}
@@ -408,34 +501,130 @@ func (p *plugin) clearSession(sessionKey string) {
 
 func trimContextMessages(messages []chatMessage, maxTurns int) []chatMessage {
 	if maxTurns <= 0 {
-		return messages
+		return sanitizeToolMessagePairs(messages)
 	}
 	maxMessages := maxTurns * 4
 	if len(messages) <= maxMessages {
-		return messages
+		return sanitizeToolMessagePairs(messages)
 	}
 
 	trimmed := append([]chatMessage(nil), messages[len(messages)-maxMessages:]...)
-	for len(trimmed) > 0 && trimmed[0].Role == openai.ChatMessageRoleTool {
-		trimmed = trimmed[1:]
+	return sanitizeToolMessagePairs(trimmed)
+}
+
+func normalizeChatMessages(messages []chatMessage) []chatMessage {
+	if len(messages) == 0 {
+		return nil
+	}
+	normalized := make([]chatMessage, len(messages))
+	for i, msg := range messages {
+		normalized[i] = normalizeChatMessage(msg)
+	}
+	return normalized
+}
+
+func normalizeChatMessage(msg chatMessage) chatMessage {
+	if msg.Role == openai.ChatMessageRoleAssistant && len(msg.ToolCalls) > 0 && msg.Content == "" {
+		msg.Content = " "
+	}
+	if msg.Role == openai.ChatMessageRoleTool && msg.Content == "" {
+		msg.Content = "工具执行完成"
+	}
+	return msg
+}
+
+func sanitizeToolMessagePairs(messages []chatMessage) []chatMessage {
+	if len(messages) == 0 {
+		return nil
 	}
 
-	return trimmed
+	cleaned := make([]chatMessage, 0, len(messages))
+	for i := 0; i < len(messages); {
+		msg := messages[i]
+		if msg.Role == openai.ChatMessageRoleTool {
+			i++
+			continue
+		}
+		if msg.Role != openai.ChatMessageRoleAssistant || len(msg.ToolCalls) == 0 {
+			cleaned = append(cleaned, msg)
+			i++
+			continue
+		}
+
+		expected := make(map[string]struct{}, len(msg.ToolCalls))
+		for _, call := range msg.ToolCalls {
+			if id := strings.TrimSpace(call.ID); id != "" {
+				expected[id] = struct{}{}
+			}
+		}
+		group := []chatMessage{msg}
+		j := i + 1
+		for j < len(messages) && messages[j].Role == openai.ChatMessageRoleTool {
+			toolMessage := messages[j]
+			if _, ok := expected[toolMessage.ToolCallID]; ok {
+				group = append(group, toolMessage)
+				delete(expected, toolMessage.ToolCallID)
+			}
+			j++
+		}
+		if len(expected) == 0 {
+			cleaned = append(cleaned, group...)
+		}
+		i = j
+	}
+
+	return cleaned
 }
 
 func (p *plugin) chat(messages []chatMessage) (*openai.ChatCompletionResponse, error) {
-	resp, err := p.aiClient.CreateChatCompletion(context.Background(), openai.ChatCompletionRequest{
+	req := openai.ChatCompletionRequest{
 		Model:       p.cfg.Model,
 		Messages:    messages,
 		Tools:       p.toolDefinitions(),
 		ToolChoice:  "auto",
 		Temperature: float32(p.cfg.Temperature),
-	})
+	}
+	p.debugLogChatRequest("chat_completion", req)
+	resp, err := p.aiClient.CreateChatCompletion(context.Background(), req)
 	if err != nil {
 		return nil, err
 	}
 
 	return &resp, nil
+}
+
+func (p *plugin) debugLogChatRequest(kind string, req openai.ChatCompletionRequest) {
+	if !p.cfg.Debug {
+		return
+	}
+	path := strings.TrimSpace(p.cfg.DebugLogPath)
+	if path == "" {
+		path = "data/agent_api_body.log"
+	}
+	if err := ensureDir(filepath.Dir(path)); err != nil {
+		log.Printf("[agent/debug] 创建 debug 日志目录失败: %v", err)
+		return
+	}
+
+	entry := map[string]interface{}{
+		"time": time.Now().Format(time.RFC3339Nano),
+		"kind": kind,
+		"body": req,
+	}
+	data, err := json.Marshal(entry)
+	if err != nil {
+		log.Printf("[agent/debug] 序列化 API body 失败: %v", err)
+		return
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		log.Printf("[agent/debug] 打开 debug 日志文件失败: %v", err)
+		return
+	}
+	defer file.Close()
+	if _, err := file.Write(append(data, '\n')); err != nil {
+		log.Printf("[agent/debug] 写入 debug 日志失败: %v", err)
+	}
 }
 
 func (p *plugin) readSkillCommand(ctx *zero.Ctx, command string) {
@@ -519,6 +708,12 @@ func (p *plugin) callTool(ctx *zero.Ctx, name string, rawArgs string) string {
 	case "write_memory":
 		err := p.writeMemoryFile(stringArg(args, "key"), stringArg(args, "content"))
 		return toolResult("已写入记忆", err)
+	case "search_memory":
+		query := stringArg(args, "query")
+		limit := numberArg(args, "limit", 5)
+		content, err := p.SearchMemory(query, limit)
+		log.Printf("[agent] search_memory query=%q limit=%d 结果长度=%d err=%v", query, limit, len(content), err)
+		return toolResult(content, err)
 	case "read_memory":
 		content, err := p.readMemoryFile(stringArg(args, "key"))
 		return toolResult(content, err)
@@ -527,6 +722,36 @@ func (p *plugin) callTool(ctx *zero.Ctx, name string, rawArgs string) string {
 		return toolResult(content, err)
 	case "xhs_dislike":
 		content, err := p.runXHSDislike(ctx, args)
+		return toolResult(content, err)
+	case "send_forward_images":
+		content, err := p.callSendForwardImages(ctx, args)
+		return toolResult(content, err)
+	case "eh_download_images":
+		content, err := p.callEHDownloadImages(args)
+		return toolResult(content, err)
+	case "eh_tag_load":
+		content, err := p.callEHTagLoad(args)
+		return toolResult(content, err)
+	case "eh_tag_search":
+		content, err := p.callEHTagSearch(args)
+		return toolResult(content, err)
+	case "eh_tag_resolve_keyword":
+		content, err := p.callEHTagResolveKeyword(args)
+		return toolResult(content, err)
+	case "eh_tag_translate":
+		content, err := p.callEHTagTranslate(args)
+		return toolResult(content, err)
+	case "eh_req_search":
+		content, err := p.callEHReqSearch(args)
+		return toolResult(content, err)
+	case "eh_req_gallery":
+		content, err := p.callEHReqGallery(args)
+		return toolResult(content, err)
+	case "eh_req_api":
+		content, err := p.callEHReqAPI(args)
+		return toolResult(content, err)
+	case "eh_req_image_page":
+		content, err := p.callEHReqImagePage(args)
 		return toolResult(content, err)
 	case "exa_search":
 		content, err := p.callExaSearch(args)
@@ -542,6 +767,9 @@ func (p *plugin) callTool(ctx *zero.Ctx, name string, rawArgs string) string {
 func toolResult(content string, err error) string {
 	if err != nil {
 		return "错误：" + err.Error()
+	}
+	if strings.TrimSpace(content) == "" {
+		return "工具执行完成"
 	}
 	return content
 }
@@ -592,6 +820,13 @@ func truncate(text string, max int) string {
 	}
 	runes := []rune(text)
 	return string(runes[:max]) + "..."
+}
+
+func truncateRunes(text string, max int) string {
+	if max <= 0 || len([]rune(text)) <= max {
+		return text
+	}
+	return string([]rune(text)[:max]) + "..."
 }
 
 func safeName(name string) string {

@@ -45,8 +45,12 @@ type AgentConfig struct {
 	ContextTTL          int           `json:"contextTTL"`
 	MaxResponseChars    int           `json:"maxResponseChars"`
 	Temperature         float64       `json:"temperature"`
+	Debug               bool          `json:"debug"`
+	DebugLogPath        string        `json:"debugLogPath"`
 	Browser             BrowserConfig `json:"browser"`
 	Exa                 ExaConfig     `json:"exa"`
+	EHTag               EHTagConfig   `json:"ehTag"`
+	EHReq               EHReqConfig   `json:"ehReq"`
 }
 
 type BrowserConfig struct {
@@ -60,6 +64,23 @@ type ExaConfig struct {
 	BaseURL           string `json:"baseURL"`
 	DefaultType       string `json:"defaultType"`
 	DefaultNumResults int    `json:"defaultNumResults"`
+}
+
+type EHTagConfig struct {
+	Enabled   bool   `json:"enabled"`
+	SourceURL string `json:"sourceURL"`
+	CachePath string `json:"cachePath"`
+}
+
+type EHReqConfig struct {
+	Enabled      bool   `json:"enabled"`
+	Cookie       string `json:"cookie"`
+	CookieEnv    string `json:"cookieEnv"`
+	CookiePath   string `json:"cookiePath"`
+	ProxyURL     string `json:"proxyURL"`
+	ProxyEnv     string `json:"proxyEnv"`
+	UserAgent    string `json:"userAgent"`
+	MaxBodyChars int    `json:"maxBodyChars"`
 }
 
 type DriverConfig struct {
@@ -151,6 +172,9 @@ func (cfg AgentConfig) withDefaults() AgentConfig {
 	if cfg.MaxResponseChars <= 0 {
 		cfg.MaxResponseChars = 3500
 	}
+	if cfg.DebugLogPath == "" {
+		cfg.DebugLogPath = "data/agent_api_body.log"
+	}
 	if cfg.Browser.BaseURL == "" {
 		cfg.Browser.BaseURL = "http://127.0.0.1:58000"
 	}
@@ -162,6 +186,27 @@ func (cfg AgentConfig) withDefaults() AgentConfig {
 	}
 	if cfg.Exa.DefaultNumResults <= 0 {
 		cfg.Exa.DefaultNumResults = 5
+	}
+	if cfg.EHTag.SourceURL == "" {
+		cfg.EHTag.SourceURL = "https://fastly.jsdelivr.net/gh/EhTagTranslation/DatabaseReleases/db.html.json"
+	}
+	if cfg.EHTag.CachePath == "" {
+		cfg.EHTag.CachePath = "data/eh_tag_db.html.json"
+	}
+	if cfg.EHReq.CookieEnv == "" {
+		cfg.EHReq.CookieEnv = "EHENTAI_COOKIE"
+	}
+	if cfg.EHReq.CookiePath == "" {
+		cfg.EHReq.CookiePath = ".secrets/ehentai.cookies"
+	}
+	if cfg.EHReq.ProxyEnv == "" {
+		cfg.EHReq.ProxyEnv = "EHENTAI_PROXY"
+	}
+	if cfg.EHReq.UserAgent == "" {
+		cfg.EHReq.UserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+	}
+	if cfg.EHReq.MaxBodyChars <= 0 {
+		cfg.EHReq.MaxBodyChars = 200000
 	}
 
 	return cfg

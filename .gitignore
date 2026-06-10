@@ -3,3 +3,5 @@ config.json
 setubot
 *.pyc
 xhs_last.json
+.secrets/
+data/

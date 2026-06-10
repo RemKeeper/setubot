@@ -2,12 +2,14 @@
 """
 小红书涩图一键操作脚本
 通过 Camoufox API 完成：浏览推荐页/关键词搜索 → 筛选帖子 → 点赞 → 收藏 → 提取图片URL
+可使用 --skip-engage 跳过自动点赞和收藏，只提取图片URL。
 
 用法:
     # 推荐页模式（默认）
     python3 xhs_setu.py                        # 默认操作1个帖子
     python3 xhs_setu.py --count 3              # 操作3个帖子
     python3 xhs_setu.py --count 5 --scroll 8   # 操作5个，滚动8次加载更多
+    python3 xhs_setu.py --count 3 --skip-engage # 不自动点赞/收藏
 
     # 关键词搜索模式
     python3 xhs_setu.py -k "碧蓝航线cos"                      # 搜索关键词，默认5个帖子
@@ -532,7 +534,7 @@ def search_mode(args) -> list[dict]:
             "title": post["title"],
             "url": detail_url,
             "note_id": post["note_id"],
-        })
+        }, skip_engage=args.skip_engage)
 
         if result.get("skipped"):
             print(f"  ⏭️ 跳过（视频帖），尝试下一个...", file=sys.stderr)
@@ -715,9 +717,9 @@ def match_note_tags(tags: list[dict]) -> dict:
 #  帖子处理（共用）
 # ══════════════════════════════════════════════════════════════════════
 
-def process_one_post(post: dict, require_positive_tag: bool = False) -> dict:
+def process_one_post(post: dict, require_positive_tag: bool = False, skip_engage: bool = False) -> dict:
     """
-    处理单个帖子：打开 → 提取/校验tag → 检测视频 → 点赞 → 收藏 → 提取图片
+    处理单个帖子：打开 → 提取/校验tag → 检测视频 → 可选点赞/收藏 → 提取图片
     返回 {"title": ..., "url": ..., "images": [...], "liked": bool, "collected": bool}
     """
     result = {
@@ -773,19 +775,22 @@ def process_one_post(post: dict, require_positive_tag: bool = False) -> dict:
             result["skip_reason"] = "video"
             return result
 
-        # 4. 点赞（避免重复点击已点赞状态；/api/click 失败时回退到 DOM MouseEvents）
-        result["liked"] = ensure_engage(
-            ".engage-bar-style .like-wrapper",
-            is_liked_state,
-            "点赞",
-        )
+        if skip_engage:
+            print("  ⏭️ 已启用 --skip-engage，跳过点赞和收藏", file=sys.stderr)
+        else:
+            # 4. 点赞（避免重复点击已点赞状态；/api/click 失败时回退到 DOM MouseEvents）
+            result["liked"] = ensure_engage(
+                ".engage-bar-style .like-wrapper",
+                is_liked_state,
+                "点赞",
+            )
 
-        # 5. 收藏（避免重复点击已收藏状态；/api/click 失败时回退到 DOM MouseEvents）
-        result["collected"] = ensure_engage(
-            ".engage-bar-style .collect-wrapper",
-            is_collected_state,
-            "收藏",
-        )
+            # 5. 收藏（避免重复点击已收藏状态；/api/click 失败时回退到 DOM MouseEvents）
+            result["collected"] = ensure_engage(
+                ".engage-bar-style .collect-wrapper",
+                is_collected_state,
+                "收藏",
+            )
 
         # 6. 提取图片
         images = extract_detail_images_js()
@@ -840,6 +845,7 @@ def main():
     parser.add_argument("--scroll", "-s", type=int, default=None, help="滚动次数（推荐页默认2，搜索模式默认4）")
     parser.add_argument("--keyword", "-k", type=str, default=None, help="搜索关键词（启用关键词搜索模式）")
     parser.add_argument("--seen", type=str, default=None, help="去重文件路径，记录已处理帖子ID（用于'再来一些'）")
+    parser.add_argument("--skip-engage", action="store_true", help="跳过自动点赞和收藏，只提取图片")
     args = parser.parse_args()
 
     # 搜索模式默认值覆盖
@@ -927,7 +933,7 @@ def main():
         post = pending.pop(0)
         processed_count_display = processed_count + 1
         print(f"\n🎯 [{processed_count_display}/{count}] 处理: {post['title'][:40]}...", file=sys.stderr)
-        result = process_one_post(post, require_positive_tag=True)
+        result = process_one_post(post, require_positive_tag=True, skip_engage=args.skip_engage)
 
         if result.get("skipped"):
             if candidate_queue:
