@@ -151,6 +151,7 @@ func (p *plugin) extractNickCommand(text string) (string, bool) {
 }
 
 func (p *plugin) dispatch(ctx *zero.Ctx) {
+	ctx.NoTimeout()
 	command, ok := p.extractCommand(ctx)
 	if !ok {
 		return
