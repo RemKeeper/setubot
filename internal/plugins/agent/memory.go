@@ -35,6 +35,13 @@ type memorySearchHit struct {
 	score   float64
 }
 
+type memoryExtractionResult struct {
+	ShouldWrite bool   `json:"should_write"`
+	Key         string `json:"key"`
+	Content     string `json:"content"`
+	Reason      string `json:"reason"`
+}
+
 func NewMemoryStore(dir string) (*MemoryStore, error) {
 	if err := ensureDir(dir); err != nil {
 		return nil, err
@@ -82,6 +89,10 @@ func (s *MemoryStore) Index(key string, content string) error {
 }
 
 func (s *MemoryStore) Search(query string, limit int) (string, error) {
+	return s.SearchScoped(query, limit, nil)
+}
+
+func (s *MemoryStore) SearchScoped(query string, limit int, allowedPrefixes []string) (string, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return "", fmt.Errorf("记忆检索词不能为空")
@@ -94,12 +105,20 @@ func (s *MemoryStore) Search(query string, limit int) (string, error) {
 	}
 
 	hits := make(map[string]memorySearchHit)
-	if err := s.searchBleve(query, limit, hits); err != nil {
+	searchLimit := limit
+	if len(allowedPrefixes) > 0 {
+		searchLimit = limit * 10
+		if searchLimit < 50 {
+			searchLimit = 50
+		}
+	}
+	if err := s.searchBleve(query, searchLimit, hits); err != nil {
 		return "", err
 	}
-	if err := s.searchSubstring(query, hits); err != nil {
+	if err := s.searchSubstring(query, hits, allowedPrefixes); err != nil {
 		return "", err
 	}
+	filterMemoryHits(hits, allowedPrefixes)
 	if len(hits) == 0 {
 		return "", nil
 	}
@@ -148,13 +167,16 @@ func (s *MemoryStore) searchBleve(query string, limit int, hits map[string]memor
 	return nil
 }
 
-func (s *MemoryStore) searchSubstring(query string, hits map[string]memorySearchHit) error {
+func (s *MemoryStore) searchSubstring(query string, hits map[string]memorySearchHit, allowedPrefixes []string) error {
 	names, err := listFileNames(s.dir)
 	if err != nil {
 		return err
 	}
 	terms := memorySearchTerms(query)
 	for _, name := range names {
+		if !memoryKeyAllowed(name, allowedPrefixes) {
+			continue
+		}
 		content, err := readTextFileInDir(s.dir, name)
 		if err != nil {
 			continue
@@ -170,6 +192,29 @@ func (s *MemoryStore) searchSubstring(query string, hits map[string]memorySearch
 	}
 
 	return nil
+}
+
+func filterMemoryHits(hits map[string]memorySearchHit, allowedPrefixes []string) {
+	if len(allowedPrefixes) == 0 {
+		return
+	}
+	for key := range hits {
+		if !memoryKeyAllowed(key, allowedPrefixes) {
+			delete(hits, key)
+		}
+	}
+}
+
+func memoryKeyAllowed(key string, allowedPrefixes []string) bool {
+	if len(allowedPrefixes) == 0 {
+		return true
+	}
+	for _, prefix := range allowedPrefixes {
+		if prefix != "" && strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func fieldString(value interface{}) string {
@@ -248,8 +293,16 @@ func (p *plugin) listSkillNames() ([]string, error) {
 }
 
 func (p *plugin) writeMemoryFile(key string, content string) error {
+	return p.writeScopedMemoryFile("", key, content)
+}
+
+func (p *plugin) writeScopedMemoryFile(scopePrefix string, key string, content string) error {
 	key = safeName(key)
+	scopePrefix = safeName(scopePrefix)
 	content = strings.TrimSpace(content)
+	if scopePrefix != "" {
+		key = scopePrefix + "__" + key
+	}
 	if key == "" {
 		return fmt.Errorf("记忆键不能为空")
 	}
@@ -275,14 +328,18 @@ func (p *plugin) writeMemoryFile(key string, content string) error {
 }
 
 func (p *plugin) SearchMemory(query string, limit int) (string, error) {
-	if p.memory != nil {
-		return p.memory.Search(query, limit)
-	}
-
-	return p.searchMemoryFiles(query, limit)
+	return p.SearchScopedMemory(query, limit, nil)
 }
 
-func (p *plugin) searchMemoryFiles(query string, limit int) (string, error) {
+func (p *plugin) SearchScopedMemory(query string, limit int, allowedPrefixes []string) (string, error) {
+	if p.memory != nil {
+		return p.memory.SearchScoped(query, limit, allowedPrefixes)
+	}
+
+	return p.searchMemoryFiles(query, limit, allowedPrefixes)
+}
+
+func (p *plugin) searchMemoryFiles(query string, limit int, allowedPrefixes []string) (string, error) {
 	store := &MemoryStore{dir: p.cfg.MemoryDir}
 	query = strings.TrimSpace(query)
 	if query == "" {
@@ -296,7 +353,7 @@ func (p *plugin) searchMemoryFiles(query string, limit int) (string, error) {
 	}
 
 	hits := make(map[string]memorySearchHit)
-	if err := store.searchSubstring(query, hits); err != nil {
+	if err := store.searchSubstring(query, hits, allowedPrefixes); err != nil {
 		return "", err
 	}
 	if len(hits) == 0 {
@@ -326,7 +383,15 @@ func (p *plugin) searchMemoryFiles(query string, limit int) (string, error) {
 }
 
 func (p *plugin) readMemoryFile(key string) (string, error) {
+	return p.readScopedMemoryFile("", key)
+}
+
+func (p *plugin) readScopedMemoryFile(scopePrefix string, key string) (string, error) {
 	key = safeName(key)
+	scopePrefix = safeName(scopePrefix)
+	if scopePrefix != "" {
+		key = scopePrefix + "__" + key
+	}
 	if filepath.Ext(key) == "" {
 		key += ".md"
 	}
@@ -334,7 +399,24 @@ func (p *plugin) readMemoryFile(key string) (string, error) {
 }
 
 func (p *plugin) listMemoryNames() ([]string, error) {
-	return listFileNames(p.cfg.MemoryDir)
+	return p.listScopedMemoryNames(nil)
+}
+
+func (p *plugin) listScopedMemoryNames(allowedPrefixes []string) ([]string, error) {
+	names, err := listFileNames(p.cfg.MemoryDir)
+	if err != nil {
+		return nil, err
+	}
+	if len(allowedPrefixes) == 0 {
+		return names, nil
+	}
+	filtered := make([]string, 0, len(names))
+	for _, name := range names {
+		if memoryKeyAllowed(name, allowedPrefixes) {
+			filtered = append(filtered, name)
+		}
+	}
+	return filtered, nil
 }
 
 func (p *plugin) readAllMemories() (string, error) {

@@ -92,7 +92,7 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
 				Name:        "write_memory",
-				Description: "写入或更新一条持久化记忆。",
+				Description: "写入或更新一条当前聊天作用域内的持久化记忆。群聊会自动按群隔离，适合保存明确的长期偏好、规则、项目约定或持续任务上下文；不要保存敏感信息、临时请求或猜测。",
 				Parameters: objectSchema(map[string]interface{}{
 					"key":     stringSchema("记忆键名"),
 					"content": stringSchema("记忆内容"),
@@ -103,7 +103,7 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
 				Name:        "read_memory",
-				Description: "按键名精确读取一条持久化记忆。需要先搜索未知键名时优先用 search_memory。",
+				Description: "按键名精确读取当前聊天作用域内的一条持久化记忆。群聊只能读取当前群的记忆。需要先搜索未知键名时优先用 search_memory。",
 				Parameters: objectSchema(map[string]interface{}{
 					"key": stringSchema("记忆键名"),
 				}, []string{"key"}),
@@ -113,7 +113,7 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
 				Name:        "search_memory",
-				Description: "使用本地 MemoryStore 全文索引搜索相关持久化记忆，避免一次性读取全部记忆。",
+				Description: "使用本地 MemoryStore 全文索引搜索当前聊天作用域内的相关持久化记忆。群聊会自动按群隔离，避免不同群的记忆互相污染。",
 				Parameters: objectSchema(map[string]interface{}{
 					"query": stringSchema("用于检索记忆的关键词或自然语言问题"),
 					"limit": numberSchema("最多返回条数，默认 5，最大 20"),

@@ -195,7 +195,7 @@ func (p *plugin) isHelpText(command string) bool {
 }
 
 func (p *plugin) help(ctx *zero.Ctx) {
-	ctx.Send("Agent 插件命令：\n1. 群聊：@机器人 <问题>\n2. 私聊：直接发送 <问题>\n3. 重置上下文\n4. skill 读取 <文件名>\n5. memory 写入 <键>: <内容>\n6. memory 读取 <键>\n7. memory 列表\n小红书：来点涩图 / 来N张涩图 / 来点关键词涩图 / 不喜欢\n浏览器工具由 agent 自动调用：goto/click/type/html/screenshot/evaluate/scroll")
+	ctx.Send("Agent 插件命令：\n1. 群聊：@机器人 <问题>\n2. 私聊：直接发送 <问题>\n3. 重置上下文\n4. skill 读取 <文件名>\n5. memory 写入 <键>: <内容>\n6. memory 读取 <键>\n7. memory 列表\n说明：群聊记忆按群隔离，不同群不会互相污染；agent 会在回答后自动抽取少量长期记忆。\n小红书：来点涩图 / 来N张涩图 / 来点关键词涩图 / 不喜欢\n浏览器工具由 agent 自动调用：goto/click/type/html/screenshot/evaluate/scroll")
 }
 
 func (p *plugin) agentCommand(ctx *zero.Ctx, prompt string) {
@@ -233,21 +233,22 @@ func (p *plugin) resetContext(ctx *zero.Ctx) {
 }
 
 func (p *plugin) runAgent(ctx *zero.Ctx, prompt string) (string, error) {
-	memories, _ := p.SearchMemory(prompt, 5)
+	sessionKey := p.sessionKey(ctx)
+	memories, _ := p.SearchScopedMemory(p.memoryQuery(ctx, prompt, sessionKey), 8, p.memoryAllowedPrefixes(ctx))
 	skills, _ := p.listSkillNames()
 	system := p.cfg.SystemPrompt
 	if system == "" {
 		system = "你是一个简洁可靠的中文 AI 助手。必要时可以调用工具读取 skill、搜索/读写记忆、控制浏览器。"
 	}
+	system += "\n长期记忆策略：你只能使用当前聊天作用域内的记忆。群聊记忆按群隔离，不要把不同群的偏好、约定或上下文混用。若用户明确表达稳定偏好、长期事实、后续要遵守的规则或项目约定，应调用 write_memory 保存；若问题可能依赖过往偏好或约定，应主动调用 search_memory 补充检索。不要保存敏感信息、一次性临时信息或未经确认的猜测。"
 	if len(skills) > 0 {
 		system += "\n可用 skills：" + strings.Join(skills, ", ")
 	}
 	if strings.TrimSpace(memories) != "" {
-		system += "\n与当前问题最相关的已保存记忆（来自 MemoryStore/SearchMemory 检索，不代表全部记忆）：\n" + memories
+		system += "\n与当前聊天作用域最相关的已保存记忆（已按群聊/私聊隔离，不代表全部记忆）：\n" + memories
 	}
 	system += p.requestIdentityContext(ctx)
 
-	sessionKey := p.sessionKey(ctx)
 	turnMessages := []chatMessage{{Role: openai.ChatMessageRoleUser, Content: prompt}}
 	messages := p.buildMessages(system, sessionKey, turnMessages)
 
@@ -265,7 +266,9 @@ func (p *plugin) runAgent(ctx *zero.Ctx, prompt string) (string, error) {
 		turnMessages = append(turnMessages, msg)
 		if len(msg.ToolCalls) == 0 {
 			p.appendSession(sessionKey, turnMessages)
-			return strings.TrimSpace(msg.Content), nil
+			answer := strings.TrimSpace(msg.Content)
+			p.maybeExtractMemory(ctx, prompt, answer, memories)
+			return answer, nil
 		}
 
 		for _, call := range msg.ToolCalls {
@@ -289,6 +292,62 @@ func (p *plugin) sessionKey(ctx *zero.Ctx) string {
 	}
 
 	return fmt.Sprintf("private:%d", ctx.Event.UserID)
+}
+
+func (p *plugin) memoryScopePrefix(ctx *zero.Ctx) string {
+	if ctx.Event.GroupID != 0 {
+		return fmt.Sprintf("group_%d", ctx.Event.GroupID)
+	}
+	return fmt.Sprintf("private_%d", ctx.Event.UserID)
+}
+
+func (p *plugin) userMemoryScopePrefix(ctx *zero.Ctx) string {
+	return fmt.Sprintf("user_%d", ctx.Event.UserID)
+}
+
+func (p *plugin) memoryAllowedPrefixes(ctx *zero.Ctx) []string {
+	prefixes := []string{p.memoryScopePrefix(ctx), p.userMemoryScopePrefix(ctx)}
+	return dedupeStrings(prefixes)
+}
+
+func (p *plugin) memoryQuery(ctx *zero.Ctx, prompt string, sessionKey string) string {
+	summary, history := p.sessionHistory(sessionKey)
+	parts := []string{
+		prompt,
+		fmt.Sprintf("用户ID %d", ctx.Event.UserID),
+		requestUserName(ctx),
+	}
+	if ctx.Event.GroupID != 0 {
+		parts = append(parts, fmt.Sprintf("群号 %d", ctx.Event.GroupID))
+	}
+	if strings.TrimSpace(summary) != "" {
+		parts = append(parts, summary)
+	}
+	for _, msg := range recentUserMessages(history, 3) {
+		parts = append(parts, msg)
+	}
+	return strings.Join(dedupeStrings(parts), "\n")
+}
+
+func recentUserMessages(messages []chatMessage, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+	result := make([]string, 0, limit)
+	for i := len(messages) - 1; i >= 0 && len(result) < limit; i-- {
+		msg := messages[i]
+		if msg.Role != openai.ChatMessageRoleUser {
+			continue
+		}
+		content := strings.TrimSpace(msg.Content)
+		if content != "" {
+			result = append(result, content)
+		}
+	}
+	for i, j := 0, len(result)-1; i < j; i, j = i+1, j-1 {
+		result[i], result[j] = result[j], result[i]
+	}
+	return result
 }
 
 func (p *plugin) requestIdentityContext(ctx *zero.Ctx) string {
@@ -474,6 +533,66 @@ func (p *plugin) summarizeContext(previousSummary string, messages []chatMessage
 	return strings.TrimSpace(resp.Choices[0].Message.Content), nil
 }
 
+func (p *plugin) maybeExtractMemory(ctx *zero.Ctx, userPrompt string, assistantAnswer string, relatedMemories string) {
+	if p.cfg.APIKey == "" || strings.TrimSpace(userPrompt) == "" || strings.TrimSpace(assistantAnswer) == "" {
+		return
+	}
+	result, err := p.extractMemory(ctx, userPrompt, assistantAnswer, relatedMemories)
+	if err != nil {
+		log.Printf("[agent] 自动抽取记忆失败: %v", err)
+		return
+	}
+	if !result.ShouldWrite {
+		return
+	}
+	key := strings.TrimSpace(result.Key)
+	content := strings.TrimSpace(result.Content)
+	if key == "" || content == "" {
+		return
+	}
+	if err := p.writeScopedMemoryFile(p.memoryScopePrefix(ctx), key, content); err != nil {
+		log.Printf("[agent] 自动写入记忆失败: %v", err)
+	}
+}
+
+func (p *plugin) extractMemory(ctx *zero.Ctx, userPrompt string, assistantAnswer string, relatedMemories string) (memoryExtractionResult, error) {
+	identity := p.requestIdentityContext(ctx)
+	content := "请判断以下一轮对话是否包含值得写入长期记忆的信息。只保存稳定、未来仍有用的信息，例如用户明确偏好、长期事实、后续要遵守的规则、项目约定、持续任务上下文。不要保存敏感信息、账号密钥、Cookie、一次性闲聊、临时请求、未经确认的推测。群聊记忆必须只适用于当前群，不要泛化到其他群。\n\n"
+	content += "必须只输出一个 JSON 对象，不要使用 Markdown，不要附加解释。格式：{\"should_write\": boolean, \"key\": string, \"content\": string, \"reason\": string}\n"
+	content += "key 使用简短中文或英文名，不要包含路径。content 用中文短句，必须包含适用范围，例如当前群号或当前用户 ID。若已有相关记忆已经覆盖本轮信息，应输出 should_write=false。\n\n"
+	content += identity
+	if strings.TrimSpace(relatedMemories) != "" {
+		content += "\n\n已有相关记忆：\n" + truncateRunes(relatedMemories, 2000)
+	}
+	content += "\n\n用户消息：\n" + truncateRunes(userPrompt, 2000)
+	content += "\n\n助手回答：\n" + truncateRunes(assistantAnswer, 2000)
+
+	req := openai.ChatCompletionRequest{
+		Model:       p.cfg.Model,
+		Messages:    []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: content}},
+		Temperature: 0,
+	}
+	p.debugLogChatRequest("extract_memory", req)
+	resp, err := p.aiClient.CreateChatCompletion(context.Background(), req)
+	if err != nil {
+		return memoryExtractionResult{}, err
+	}
+	if len(resp.Choices) == 0 {
+		return memoryExtractionResult{}, fmt.Errorf("记忆抽取模型未返回结果")
+	}
+
+	raw := strings.TrimSpace(resp.Choices[0].Message.Content)
+	raw = strings.TrimPrefix(raw, "```json")
+	raw = strings.TrimPrefix(raw, "```")
+	raw = strings.TrimSuffix(raw, "```")
+	raw = strings.TrimSpace(raw)
+	var result memoryExtractionResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return memoryExtractionResult{}, err
+	}
+	return result, nil
+}
+
 func renderMessagesForSummary(messages []chatMessage) string {
 	parts := make([]string, 0, len(messages))
 	for _, msg := range messages {
@@ -656,7 +775,7 @@ func (p *plugin) writeMemoryCommand(ctx *zero.Ctx, command string) {
 		ctx.Send("memory 写入格式：<昵称> memory 写入 <键>: <内容>")
 		return
 	}
-	if err := p.writeMemoryFile(matches[1], matches[2]); err != nil {
+	if err := p.writeScopedMemoryFile(p.memoryScopePrefix(ctx), matches[1], matches[2]); err != nil {
 		ctx.Send(fmt.Sprintf("写入记忆失败：%v", err))
 		return
 	}
@@ -673,7 +792,7 @@ func (p *plugin) readMemoryCommand(ctx *zero.Ctx, command string) {
 		ctx.Send("memory 读取格式：<昵称> memory 读取 <键>")
 		return
 	}
-	content, err := p.readMemoryFile(matches[1])
+	content, err := p.readScopedMemoryFile(p.memoryScopePrefix(ctx), matches[1])
 	if err != nil {
 		ctx.Send(fmt.Sprintf("读取记忆失败：%v", err))
 		return
@@ -682,7 +801,7 @@ func (p *plugin) readMemoryCommand(ctx *zero.Ctx, command string) {
 }
 
 func (p *plugin) listMemory(ctx *zero.Ctx) {
-	names, err := p.listMemoryNames()
+	names, err := p.listScopedMemoryNames(p.memoryAllowedPrefixes(ctx))
 	if err != nil {
 		ctx.Send(fmt.Sprintf("读取记忆列表失败：%v", err))
 		return
@@ -707,16 +826,16 @@ func (p *plugin) callTool(ctx *zero.Ctx, name string, rawArgs string) string {
 		content, err := p.readSkillFile(stringArg(args, "name"))
 		return toolResult(content, err)
 	case "write_memory":
-		err := p.writeMemoryFile(stringArg(args, "key"), stringArg(args, "content"))
+		err := p.writeScopedMemoryFile(p.memoryScopePrefix(ctx), stringArg(args, "key"), stringArg(args, "content"))
 		return toolResult("已写入记忆", err)
 	case "search_memory":
 		query := stringArg(args, "query")
 		limit := numberArg(args, "limit", 5)
-		content, err := p.SearchMemory(query, limit)
+		content, err := p.SearchScopedMemory(p.memoryQuery(ctx, query, p.sessionKey(ctx)), limit, p.memoryAllowedPrefixes(ctx))
 		log.Printf("[agent] search_memory query=%q limit=%d 结果长度=%d err=%v", query, limit, len(content), err)
 		return toolResult(content, err)
 	case "read_memory":
-		content, err := p.readMemoryFile(stringArg(args, "key"))
+		content, err := p.readScopedMemoryFile(p.memoryScopePrefix(ctx), stringArg(args, "key"))
 		return toolResult(content, err)
 	case "xhs_setu":
 		content, err := p.runXHSSetu(ctx, args)
