@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"image"
+	"image/color"
 	"testing"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -81,5 +83,44 @@ func TestNormalizeChatMessageAddsContentForToolResult(t *testing.T) {
 func TestToolResultReturnsNonEmptySuccess(t *testing.T) {
 	if got := toolResult("", nil); got == "" {
 		t.Fatal("expected empty successful tool result to be replaced")
+	}
+}
+
+func TestNormalizeImageRotation(t *testing.T) {
+	for _, degrees := range []int{0, 90, 180, 270} {
+		got, err := normalizeImageRotation(degrees)
+		if err != nil {
+			t.Fatalf("normalizeImageRotation(%d) unexpected error: %v", degrees, err)
+		}
+		if got != degrees {
+			t.Fatalf("normalizeImageRotation(%d) = %d", degrees, got)
+		}
+	}
+	if _, err := normalizeImageRotation(45); err == nil {
+		t.Fatal("expected unsupported rotation to fail")
+	}
+}
+
+func TestRotateImage90(t *testing.T) {
+	src := image.NewNRGBA(image.Rect(0, 0, 2, 3))
+	red := color.NRGBA{R: 255, A: 255}
+	green := color.NRGBA{G: 255, A: 255}
+	blue := color.NRGBA{B: 255, A: 255}
+	src.Set(0, 0, red)
+	src.Set(1, 0, green)
+	src.Set(0, 2, blue)
+
+	dst := rotateImage(src, 90)
+	if dst.Bounds().Dx() != 3 || dst.Bounds().Dy() != 2 {
+		t.Fatalf("unexpected bounds: %v", dst.Bounds())
+	}
+	if got := dst.NRGBAAt(2, 0); got != red {
+		t.Fatalf("red pixel moved to %v, want %v", got, red)
+	}
+	if got := dst.NRGBAAt(2, 1); got != green {
+		t.Fatalf("green pixel moved to %v, want %v", got, green)
+	}
+	if got := dst.NRGBAAt(0, 0); got != blue {
+		t.Fatalf("blue pixel moved to %v, want %v", got, blue)
 	}
 }

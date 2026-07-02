@@ -129,8 +129,9 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 		functionTool("xhs_dislike", "撤销最近一次小红书帖子的点赞和收藏；可选把关键词加入负面列表。", map[string]interface{}{
 			"keyword": stringSchema("可选负面关键词，只有用户明确要求以后别推某类内容时填写"),
 		}, []string{}),
-		functionTool("send_forward_images", "把多个图片链接作为合并转发消息发送到当前聊天。合并转发节点的发送者会伪造成本次请求的发起人。", map[string]interface{}{
+		functionTool("send_forward_images", "把多个图片链接作为合并转发消息发送到当前聊天。合并转发节点的发送者会伪造成本次请求的发起人。可选 rotate 参数会先把图片顺时针旋转后再发送。", map[string]interface{}{
 			"images": arrayStringSchema("图片链接列表，至少 1 个，最多 30 个"),
+			"rotate": enumNumberSchema("可选；顺时针旋转角度，仅支持 90、180、270；不传或传 0 表示不旋转", []int{0, 90, 180, 270}),
 		}, []string{"images"}),
 		functionTool("eh_download_images", "下载多个 EH/EX 正文图片直链到本地缓存，并返回可传给 send_forward_images 的 file:/// 本地图片地址。下载复用 EH 请求代理配置；本地缓存最多保留 100 张旧图并自动清理。", map[string]interface{}{
 			"images":  arrayStringSchema("图片直链列表，至少 1 个；工具会返回对应 fileUrl"),
@@ -241,6 +242,14 @@ func stringSchema(description string) map[string]interface{} {
 
 func numberSchema(description string) map[string]interface{} {
 	return map[string]interface{}{"type": "number", "description": description}
+}
+
+func enumNumberSchema(description string, values []int) map[string]interface{} {
+	enum := make([]interface{}, 0, len(values))
+	for _, value := range values {
+		enum = append(enum, value)
+	}
+	return map[string]interface{}{"type": "number", "description": description, "enum": enum}
 }
 
 func boolSchema(description string) map[string]interface{} {

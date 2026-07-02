@@ -3,21 +3,38 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
+	"io"
 	"log"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	_ "image/gif"
+	_ "image/jpeg"
+
+	_ "golang.org/x/image/webp"
+
 	zero "github.com/wdvxdr1123/ZeroBot"
 	"github.com/wdvxdr1123/ZeroBot/message"
 )
 
-const maxXHSImages = 30
+const (
+	maxXHSImages         = 30
+	forwardImageMaxBytes = 80 << 20
+	forwardImageCacheMax = 100
+	forwardImageCacheDir = "forward_image_cache"
+)
 
 type xhsSetuOutput struct {
 	Count   int             `json:"count"`
@@ -182,24 +199,38 @@ func (p *plugin) sendXHSImages(ctx *zero.Ctx, results []xhsSetuResult, images []
 			nodes = append(nodes, p.forwardNode(ctx, "Tags: #"+strings.Join(result.Tags, " #")))
 		}
 	}
-	if err := p.sendForwardImages(ctx, images, nodes); err != nil {
+	if err := p.sendForwardImages(ctx, images, nodes, 0); err != nil {
 		log.Printf("[agent/xhs] 合并发送图片失败: %v", err)
 	}
 }
 
 func (p *plugin) callSendForwardImages(ctx *zero.Ctx, args map[string]interface{}) (string, error) {
 	images := stringSliceArg(args, "images")
-	if err := p.sendForwardImages(ctx, images, nil); err != nil {
+	rotate, err := normalizeImageRotation(numberArg(args, "rotate", 0))
+	if err != nil {
 		return "", err
+	}
+	if err := p.sendForwardImages(ctx, images, nil, rotate); err != nil {
+		return "", err
+	}
+	if rotate != 0 {
+		return fmt.Sprintf("已合并发送 %d 张图片，旋转 %d°", len(cleanImageURLs(images, maxXHSImages)), rotate), nil
 	}
 
 	return fmt.Sprintf("已合并发送 %d 张图片", len(cleanImageURLs(images, maxXHSImages))), nil
 }
 
-func (p *plugin) sendForwardImages(ctx *zero.Ctx, images []string, prefixNodes message.Message) error {
+func (p *plugin) sendForwardImages(ctx *zero.Ctx, images []string, prefixNodes message.Message, rotate int) error {
 	images = cleanImageURLs(images, maxXHSImages)
 	if len(images) == 0 {
 		return fmt.Errorf("图片链接不能为空")
+	}
+	if rotate != 0 {
+		rotated, err := p.rotateForwardImages(images, rotate)
+		if err != nil {
+			return err
+		}
+		images = rotated
 	}
 
 	if len(images) == 1 && len(prefixNodes) == 0 {
@@ -218,6 +249,156 @@ func (p *plugin) sendForwardImages(ctx *zero.Ctx, images []string, prefixNodes m
 	log.Printf("[agent/forward_images] 合并转发发送: sender=%d 节点数=%d 类型=%T", ctx.Event.UserID, len(nodes), nodes)
 	ctx.Send(nodes)
 	return nil
+}
+
+func normalizeImageRotation(degrees int) (int, error) {
+	switch degrees {
+	case 0, 90, 180, 270:
+		return degrees, nil
+	default:
+		return 0, fmt.Errorf("rotate 只支持 0、90、180、270")
+	}
+}
+
+func (p *plugin) rotateForwardImages(images []string, degrees int) ([]string, error) {
+	cacheDir, err := filepath.Abs(filepath.Join(filepath.Dir(p.cfg.MemoryDir), forwardImageCacheDir))
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		return nil, err
+	}
+
+	rotated := make([]string, 0, len(images))
+	for i, imageURL := range images {
+		fileURL, err := p.rotateForwardImage(imageURL, degrees, cacheDir)
+		if err != nil {
+			return nil, fmt.Errorf("旋转第 %d 张图片失败：%w", i+1, err)
+		}
+		rotated = append(rotated, fileURL)
+	}
+	if _, err := cleanupEHImageCache(cacheDir, forwardImageCacheMax); err != nil {
+		log.Printf("[agent/forward_images] 清理旋转图片缓存失败: %v", err)
+	}
+
+	return rotated, nil
+}
+
+func (p *plugin) rotateForwardImage(imageURL string, degrees int, cacheDir string) (string, error) {
+	data, err := p.readForwardImageData(imageURL)
+	if err != nil {
+		return "", err
+	}
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return "", fmt.Errorf("解码图片失败: %w", err)
+	}
+	rotated := rotateImage(img, degrees)
+
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%d", imageURL, degrees, time.Now().UnixNano())))
+	path := filepath.Join(cacheDir, fmt.Sprintf("%x.png", sum[:16]))
+	file, err := os.Create(path)
+	if err != nil {
+		return "", err
+	}
+	encodeErr := png.Encode(file, rotated)
+	closeErr := file.Close()
+	if encodeErr != nil {
+		_ = os.Remove(path)
+		return "", encodeErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(path)
+		return "", closeErr
+	}
+
+	return (&url.URL{Scheme: "file", Path: path}).String(), nil
+}
+
+func (p *plugin) readForwardImageData(imageURL string) ([]byte, error) {
+	switch {
+	case strings.HasPrefix(imageURL, "base64://"):
+		return base64.StdEncoding.DecodeString(strings.TrimPrefix(imageURL, "base64://"))
+	case strings.HasPrefix(imageURL, "file://"):
+		parsed, err := url.Parse(imageURL)
+		if err != nil {
+			return nil, err
+		}
+		return readForwardImageFile(parsed.Path)
+	case strings.HasPrefix(imageURL, "http://") || strings.HasPrefix(imageURL, "https://"):
+		return p.downloadForwardImageData(imageURL)
+	default:
+		return readForwardImageFile(imageURL)
+	}
+}
+
+func readForwardImageFile(path string) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() > forwardImageMaxBytes {
+		return nil, fmt.Errorf("图片超过 80MB 限制")
+	}
+	return os.ReadFile(path)
+}
+
+func (p *plugin) downloadForwardImageData(imageURL string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, imageURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("图片请求返回 %d", resp.StatusCode)
+	}
+	contentType := strings.TrimSpace(strings.Split(resp.Header.Get("Content-Type"), ";")[0])
+	if contentType != "" && !strings.HasPrefix(strings.ToLower(contentType), "image/") {
+		return nil, fmt.Errorf("响应不是图片: %s", contentType)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, forwardImageMaxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > forwardImageMaxBytes {
+		return nil, fmt.Errorf("图片超过 80MB 限制")
+	}
+	return data, nil
+}
+
+func rotateImage(src image.Image, degrees int) *image.NRGBA {
+	bounds := src.Bounds()
+	width := bounds.Dx()
+	height := bounds.Dy()
+	var dst *image.NRGBA
+	if degrees == 90 || degrees == 270 {
+		dst = image.NewNRGBA(image.Rect(0, 0, height, width))
+	} else {
+		dst = image.NewNRGBA(image.Rect(0, 0, width, height))
+	}
+
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			color := src.At(bounds.Min.X+x, bounds.Min.Y+y)
+			switch degrees {
+			case 90:
+				dst.Set(height-1-y, x, color)
+			case 180:
+				dst.Set(width-1-x, height-1-y, color)
+			case 270:
+				dst.Set(y, width-1-x, color)
+			default:
+				dst.Set(x, y, color)
+			}
+		}
+	}
+
+	return dst
 }
 
 func (p *plugin) forwardNode(ctx *zero.Ctx, content interface{}) message.Segment {
