@@ -101,6 +101,26 @@ func TestTaskGuardActive(t *testing.T) {
 	}
 }
 
+func TestEHGalleryCacheParts(t *testing.T) {
+	gid, token := ehGalleryCacheParts("https://exhentai.org/g/4022117/22c0b08fdc/")
+	if gid != "4022117" || token != "22c0b08fdc" {
+		t.Fatalf("unexpected gallery cache parts: %q %q", gid, token)
+	}
+	gid, token = ehGalleryCacheParts("not a gallery URL")
+	if gid != "unknown" || token != "unknown" {
+		t.Fatalf("expected unknown parts, got %q %q", gid, token)
+	}
+}
+
+func TestSafeEHCachePart(t *testing.T) {
+	if got := safeEHCachePart("abc/../DEF_123-456!"); got != "abcDEF_123-456" {
+		t.Fatalf("unexpected safe cache part: %q", got)
+	}
+	if got := safeEHCachePart("../"); got != "unknown" {
+		t.Fatalf("expected unknown for empty safe part, got %q", got)
+	}
+}
+
 func TestNormalizeImageRotation(t *testing.T) {
 	for _, degrees := range []int{0, 90, 180, 270} {
 		got, err := normalizeImageRotation(degrees)

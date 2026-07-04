@@ -81,14 +81,15 @@ type EHTagConfig struct {
 }
 
 type EHReqConfig struct {
-	Enabled      bool   `json:"enabled"`
-	Cookie       string `json:"cookie"`
-	CookieEnv    string `json:"cookieEnv"`
-	CookiePath   string `json:"cookiePath"`
-	ProxyURL     string `json:"proxyURL"`
-	ProxyEnv     string `json:"proxyEnv"`
-	UserAgent    string `json:"userAgent"`
-	MaxBodyChars int    `json:"maxBodyChars"`
+	Enabled            bool   `json:"enabled"`
+	Cookie             string `json:"cookie"`
+	CookieEnv          string `json:"cookieEnv"`
+	CookiePath         string `json:"cookiePath"`
+	ProxyURL           string `json:"proxyURL"`
+	ProxyEnv           string `json:"proxyEnv"`
+	UserAgent          string `json:"userAgent"`
+	MaxBodyChars       int    `json:"maxBodyChars"`
+	ImageCacheMaxBytes int64  `json:"imageCacheMaxBytes"`
 }
 
 type DriverConfig struct {
@@ -224,6 +225,9 @@ func (cfg AgentConfig) withDefaults() AgentConfig {
 	}
 	if cfg.EHReq.MaxBodyChars <= 0 {
 		cfg.EHReq.MaxBodyChars = 200000
+	}
+	if cfg.EHReq.ImageCacheMaxBytes <= 0 {
+		cfg.EHReq.ImageCacheMaxBytes = 2 << 30
 	}
 
 	return cfg

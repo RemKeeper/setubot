@@ -19,7 +19,6 @@ import (
 
 const (
 	ehImageCacheDirName  = "eh_image_cache"
-	ehImageCacheMaxFiles = 100
 	ehImageDownloadMax   = 100
 	ehImageDownloadRetry = 3
 	ehImageDownloadJobs  = 6
@@ -27,16 +26,21 @@ const (
 )
 
 type ehImageCacheResult struct {
-	OK           bool                         `json:"ok"`
-	CacheDir     string                       `json:"cacheDir"`
-	MaxCache     int                          `json:"maxCache"`
-	Downloaded   int                          `json:"downloaded"`
-	Failed       int                          `json:"failed"`
-	Cleaned      int                          `json:"cleaned"`
-	CookieLoaded bool                         `json:"cookieLoaded"`
-	ProxyEnabled bool                         `json:"proxyEnabled"`
-	Images       []ehImageCacheDownloadResult `json:"images"`
-	Warnings     []string                     `json:"warnings,omitempty"`
+	OK            bool                         `json:"ok"`
+	CacheRoot     string                       `json:"cacheRoot"`
+	CacheDir      string                       `json:"cacheDir"`
+	GalleryID     string                       `json:"galleryId,omitempty"`
+	GalleryToken  string                       `json:"galleryToken,omitempty"`
+	MaxCacheBytes int64                        `json:"maxCacheBytes"`
+	CacheBytes    int64                        `json:"cacheBytes"`
+	Downloaded    int                          `json:"downloaded"`
+	Failed        int                          `json:"failed"`
+	Cleaned       int                          `json:"cleaned"`
+	CleanedBytes  int64                        `json:"cleanedBytes"`
+	CookieLoaded  bool                         `json:"cookieLoaded"`
+	ProxyEnabled  bool                         `json:"proxyEnabled"`
+	Images        []ehImageCacheDownloadResult `json:"images"`
+	Warnings      []string                     `json:"warnings,omitempty"`
 }
 
 type ehImageCacheDownloadResult struct {
@@ -56,10 +60,12 @@ func (p *plugin) callEHDownloadImages(args map[string]interface{}) (string, erro
 		return "", fmt.Errorf("图片地址不能为空")
 	}
 
-	cacheDir, err := filepath.Abs(filepath.Join(filepath.Dir(p.cfg.MemoryDir), ehImageCacheDirName))
+	cacheRoot, err := filepath.Abs(filepath.Join(filepath.Dir(p.cfg.MemoryDir), ehImageCacheDirName))
 	if err != nil {
 		return "", err
 	}
+	galleryID, galleryToken := ehGalleryCacheParts(firstNonEmptyString(stringArg(args, "gallery_url"), stringArg(args, "referer")))
+	cacheDir := filepath.Join(cacheRoot, galleryID, galleryToken)
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
 		return "", err
 	}
@@ -73,12 +79,15 @@ func (p *plugin) callEHDownloadImages(args map[string]interface{}) (string, erro
 	referer := stringArg(args, "referer")
 
 	result := ehImageCacheResult{
-		OK:           true,
-		CacheDir:     cacheDir,
-		MaxCache:     ehImageCacheMaxFiles,
-		CookieLoaded: cookie != "",
-		ProxyEnabled: proxyEnabled,
-		Images:       make([]ehImageCacheDownloadResult, len(images)),
+		OK:            true,
+		CacheRoot:     cacheRoot,
+		CacheDir:      cacheDir,
+		GalleryID:     galleryID,
+		GalleryToken:  galleryToken,
+		MaxCacheBytes: p.ehImageCacheMaxBytes(),
+		CookieLoaded:  cookie != "",
+		ProxyEnabled:  proxyEnabled,
+		Images:        make([]ehImageCacheDownloadResult, len(images)),
 	}
 	if len(stringSliceArg(args, "images")) > len(images) {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("本次最多下载 %d 张图片，多余地址已忽略", ehImageDownloadMax))
@@ -103,11 +112,13 @@ func (p *plugin) callEHDownloadImages(args map[string]interface{}) (string, erro
 		}
 	}
 
-	cleaned, err := cleanupEHImageCache(cacheDir, ehImageCacheMaxFiles)
+	cleaned, cleanedBytes, cacheBytes, err := cleanupImageCacheBySize(cacheRoot, p.ehImageCacheMaxBytes())
 	if err != nil {
 		result.Warnings = append(result.Warnings, "清理缓存失败: "+err.Error())
 	} else {
 		result.Cleaned = cleaned
+		result.CleanedBytes = cleanedBytes
+		result.CacheBytes = cacheBytes
 	}
 
 	return renderJSON(result)
@@ -248,6 +259,50 @@ func cachedEHImageName(imageURL string) string {
 	return hex.EncodeToString(sum[:])[:32]
 }
 
+func (p *plugin) ehImageCacheMaxBytes() int64 {
+	if p.cfg.EHReq.ImageCacheMaxBytes > 0 {
+		return p.cfg.EHReq.ImageCacheMaxBytes
+	}
+	return 2 << 30
+}
+
+func ehGalleryCacheParts(rawURL string) (string, string) {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "unknown", "unknown"
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	for i := 0; i+2 < len(parts); i++ {
+		if parts[i] == "g" && parts[i+1] != "" && parts[i+2] != "" {
+			return safeEHCachePart(parts[i+1]), safeEHCachePart(parts[i+2])
+		}
+	}
+	return "unknown", "unknown"
+}
+
+func safeEHCachePart(value string) string {
+	value = strings.TrimSpace(value)
+	var b strings.Builder
+	for _, r := range value {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' {
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return "unknown"
+	}
+	return b.String()
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func imageExtension(contentType string, requestPath string) string {
 	if contentType != "" {
 		if exts, err := mime.ExtensionsByType(contentType); err == nil && len(exts) > 0 {
@@ -267,42 +322,67 @@ func shouldAttachEHCookie(host string) bool {
 	return host == "e-hentai.org" || host == "exhentai.org" || strings.HasSuffix(host, ".e-hentai.org") || strings.HasSuffix(host, ".exhentai.org")
 }
 
-func cleanupEHImageCache(cacheDir string, maxFiles int) (int, error) {
-	if maxFiles <= 0 {
-		return 0, nil
-	}
-	entries, err := os.ReadDir(cacheDir)
-	if err != nil {
-		return 0, err
-	}
+func cleanupImageCacheBySize(cacheDir string, maxBytes int64) (int, int64, int64, error) {
 	type cacheFile struct {
 		path    string
 		modTime time.Time
+		size    int64
 	}
-	files := make([]cacheFile, 0, len(entries))
-	for _, entry := range entries {
+	files := make([]cacheFile, 0)
+	var totalBytes int64
+	if err := filepath.WalkDir(cacheDir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
 		if entry.IsDir() {
-			continue
+			return nil
 		}
 		info, err := entry.Info()
 		if err != nil {
-			continue
+			return nil
 		}
-		files = append(files, cacheFile{path: filepath.Join(cacheDir, entry.Name()), modTime: info.ModTime()})
+		totalBytes += info.Size()
+		files = append(files, cacheFile{path: path, modTime: info.ModTime(), size: info.Size()})
+		return nil
+	}); err != nil {
+		return 0, 0, 0, err
 	}
-	if len(files) <= maxFiles {
-		return 0, nil
+	if maxBytes <= 0 || totalBytes <= maxBytes {
+		return 0, 0, totalBytes, nil
 	}
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].modTime.Before(files[j].modTime)
 	})
-	removeCount := len(files) - maxFiles
 	cleaned := 0
-	for _, file := range files[:removeCount] {
+	var cleanedBytes int64
+	for _, file := range files {
+		if totalBytes <= maxBytes {
+			break
+		}
 		if err := os.Remove(file.path); err == nil {
 			cleaned++
+			cleanedBytes += file.size
+			totalBytes -= file.size
 		}
 	}
+	removeEmptyDirs(cacheDir)
 
-	return cleaned, nil
+	return cleaned, cleanedBytes, totalBytes, nil
+}
+
+func removeEmptyDirs(root string) {
+	dirs := make([]string, 0)
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || !entry.IsDir() || path == root {
+			return nil
+		}
+		dirs = append(dirs, path)
+		return nil
+	})
+	sort.Slice(dirs, func(i, j int) bool {
+		return len(dirs[i]) > len(dirs[j])
+	})
+	for _, dir := range dirs {
+		_ = os.Remove(dir)
+	}
 }

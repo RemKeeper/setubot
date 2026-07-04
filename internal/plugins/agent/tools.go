@@ -129,18 +129,19 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 		functionTool("xhs_dislike", "撤销最近一次小红书帖子的点赞和收藏；可选把关键词加入负面列表。", map[string]interface{}{
 			"keyword": stringSchema("可选负面关键词，只有用户明确要求以后别推某类内容时填写"),
 		}, []string{}),
-		functionTool("send_forward_images", "把多个图片链接作为合并转发消息发送到当前聊天。合并转发节点的发送者会伪造成本次请求的发起人。可选 rotate 参数会先把图片顺时针旋转后再发送。", map[string]interface{}{
+		functionTool("send_forward_images", "把多个图片链接作为合并转发消息发送到当前聊天。合并转发节点的发送者会伪造成本次请求的发起人。可选 rotate 参数会先把图片顺时针旋转后再发送。重要：若图片来源于 EH/EX 正文图片页或 EH/EX 图片直链，禁止把远端链接直接传给本工具；必须先调用 eh_download_images 下载到本地缓存，再只传返回的 file:/// 本地 fileUrl。需要旋转时也应基于这些本地 fileUrl 旋转缓存后发送。", map[string]interface{}{
 			"images": arrayStringSchema("图片链接列表，至少 1 个，最多 30 个"),
 			"rotate": enumNumberSchema("可选；顺时针旋转角度，仅支持 90、180、270；不传或传 0 表示不旋转", []int{0, 90, 180, 270}),
 		}, []string{"images"}),
-		functionTool("send_forward_images_batches", "原子化分批发送完整图片列表到当前聊天。适合一次要发送超过 30 张或要求多轮分批发送的长流程；工具会在内部按 batch_size 连续发送全部批次，不需要 agent 再多轮续调。可选 rotate 参数会先把每批图片顺时针旋转后再发送。", map[string]interface{}{
+		functionTool("send_forward_images_batches", "原子化分批发送完整图片列表到当前聊天。适合一次要发送超过 30 张或要求多轮分批发送的长流程；工具会在内部按 batch_size 连续发送全部批次，不需要 agent 再多轮续调。可选 rotate 参数会先把每批图片顺时针旋转后再发送。重要：若图片来源于 EH/EX 正文图片页或 EH/EX 图片直链，禁止把远端链接直接传给本工具；必须先调用 eh_download_images 下载到本地缓存，再只传返回的 file:/// 本地 fileUrl。需要旋转时也应基于这些本地 fileUrl 旋转缓存后发送。", map[string]interface{}{
 			"images":     arrayStringSchema("完整图片链接列表，至少 1 个；工具会去重并发送全部图片"),
 			"batch_size": numberSchema("可选；每批最多图片数，默认 30，范围 1-30"),
 			"rotate":     enumNumberSchema("可选；顺时针旋转角度，仅支持 90、180、270；不传或传 0 表示不旋转", []int{0, 90, 180, 270}),
 		}, []string{"images"}),
-		functionTool("eh_download_images", "下载多个 EH/EX 正文图片直链到本地缓存，并返回可传给 send_forward_images 的 file:/// 本地图片地址。下载复用 EH 请求代理配置；本地缓存最多保留 100 张旧图并自动清理。", map[string]interface{}{
-			"images":  arrayStringSchema("图片直链列表，至少 1 个；工具会返回对应 fileUrl"),
-			"referer": stringSchema("可选 Referer，建议传对应详情页或图片页 URL"),
+		functionTool("eh_download_images", "下载多个 EH/EX 正文图片直链到本地结构化缓存，并返回可传给 send_forward_images 或 send_forward_images_batches 的 file:/// 本地图片地址。缓存目录按 gallery_url 或 referer 中的 /g/{gid}/{token}/ 组织为 eh_image_cache/{gid}/{token}/；EH/EX 获取到的正文图片不得直接把远端链接传给合并转发工具，必须先通过本工具落地缓存；需要旋转时也应把本工具返回的 fileUrl 交给发送工具生成旋转缓存。下载复用 EH 请求代理配置；缓存按 agent.ehReq.imageCacheMaxBytes 总大小自动清理。", map[string]interface{}{
+			"images":      arrayStringSchema("图片直链列表，至少 1 个；工具会返回对应 fileUrl"),
+			"referer":     stringSchema("可选 Referer，建议传对应详情页或图片页 URL"),
+			"gallery_url": stringSchema("可选漫画详情页 URL，例如 https://exhentai.org/g/4022117/22c0b08fdc/；用于按 gid/token 两层结构化缓存"),
 		}, []string{"images"}),
 		functionTool("eh_tag_load", "加载或刷新 EhTagTranslation 标签数据库索引。启动时会自动加载；仅在需要查看状态或强制刷新时调用。", map[string]interface{}{
 			"force_refresh": boolSchema("是否忽略本地缓存并强制从远程 sourceURL 重新下载"),

@@ -48,7 +48,7 @@ argument-hint: "关键词或标签；可选：站点 EH/EX、结果数量、正�
 - `eh_req_gallery`: 请求详情页 `/g/{gid}/{token}/`，支持缩略图分页 `page` 与 `show_comments`。
 - `eh_req_api`: 请求官方 API `/api.php`，支持 `gdata`、`tagsuggest` 等 JSON payload。
 - `eh_req_image_page`: 请求正文图片页 `/s/{imageHash}/{gid}-{pageNo}`，支持 `reload_key`。
-- `eh_download_images`: 并发下载多个正文图片直链到本地缓存，全部成功后返回 `file:///` 本地图片地址，供 `send_forward_images` 发送；单图失败会自动重试，缓存最多保留 100 张并自动清理。
+- `eh_download_images`: 并发下载多个正文图片直链到本地结构化缓存，全部成功后返回 `file:///` 本地图片地址，供 `send_forward_images` 或 `send_forward_images_batches` 发送；单图失败会自动重试。缓存按 `eh_image_cache/{gid}/{token}/` 两层目录保存，并按 `agent.ehReq.imageCacheMaxBytes` 总大小上限自动清理。EH/EX 获取到的正文图片不得直接把远端链接传给合并转发工具，必须先通过本工具落地缓存。
 
 这些工具会从本地配置读取 Cookie 并注入请求头，只返回 `cookieLoaded` 布尔值，不会把 Cookie 内容返回给 agent。Cookie 来源按优先级读取：
 
@@ -71,7 +71,7 @@ EH/EX 请求可单独配置代理，不影响 OpenAI、Exa、浏览器等其它�
 2. 需要元数据或标签建议时调用 `eh_req_api`。
 3. 获取漫画详情与缩略图入口时调用 `eh_req_gallery`。
 4. 解析正文图片 URL 时调用 `eh_req_image_page`。
-5. 需要发送正文图片时先调用 `eh_download_images`，再把返回的 `fileUrl` 列表传给 `send_forward_images`。
+5. 需要发送正文图片时先调用 `eh_download_images`，传入 `gallery_url` 或详情页 `referer` 以便按 `{gid}/{token}` 两层目录缓存；再把返回的 `fileUrl` 列表传给 `send_forward_images` 或 `send_forward_images_batches`。严禁把 EH/EX 远端正文图片链接直接传给合并转发工具。
 6. 若结果中 `cookieLoaded=false` 且访问 EX/受限内容失败，再引导用户在本地配置 Cookie。
 
 1. 判断是否需要 Cookie
@@ -342,10 +342,11 @@ EH/EX 请求可单独配置代理，不影响 OpenAI、Exa、浏览器等其它�
 
 ### 正文图片发送
 
-- 当需要向聊天发送漫画正文图片时，必须先调用 `eh_download_images` 下载已解析出的正文图片 URL，再调用 `send_forward_images` 发送返回的 `fileUrl` 列表。
+- 当需要向聊天发送漫画正文图片时，必须先调用 `eh_download_images` 下载已解析出的正文图片 URL，再调用 `send_forward_images` 或 `send_forward_images_batches` 发送返回的 `fileUrl` 列表。
+- EH/EX 获取到的正文图片不得直接把远端链接传给任何合并转发工具；即使用户要求旋转，也必须先用 `eh_download_images` 得到本地 `fileUrl`，再把本地 `fileUrl` 传给发送工具的 `rotate` 参数生成旋转缓存。
 - `eh_download_images` 的输入应使用已解析出的正文图片 URL 列表；若存在原图 URL 且用户要求优先原图，则优先传入 `originalImageUrl`，否则传入 `imageUrl`。
-- `eh_download_images` 只有在整批图片全部下载成功时才会返回可发送的 `fileUrl`；若任意图片最终失败，本批次会整体视为失败，agent 不要调用 `send_forward_images`，也不要改用远端 webp 直链补发。
-- `eh_download_images` 会复用 EH 请求代理配置并自动清理本地缓存，本地图片最多保留 100 张。
+- `eh_download_images` 只有在整批图片全部下载成功时才会返回可发送的 `fileUrl`；若任意图片最终失败，本批次会整体视为失败，agent 不要调用 `send_forward_images` 或 `send_forward_images_batches`，也不要改用远端 webp 直链补发。
+- `eh_download_images` 会复用 EH 请求代理配置并自动清理本地缓存；缓存目录为 `eh_image_cache/{gid}/{token}/`，例如 `https://exhentai.org/g/4022117/22c0b08fdc/` 会缓存到 `eh_image_cache/4022117/22c0b08fdc/`；缓存清理按 `agent.ehReq.imageCacheMaxBytes` 总大小限制执行，不再按图片张数限制。
 - 未经用户明确要求，不要一次性解析或发送整本漫画全部图片；应遵守 `imageLimit`。
 
 ## 图片下载请求
@@ -372,8 +373,8 @@ EH/EX 请求可单独配置代理，不影响 OpenAI、Exa、浏览器等其它�
 7. 对前 `limit` 个结果请求详情页。
 8. 从详情页解析缩略图入口。
 9. 对前 `imageLimit` 个入口请求图片页，解析正文图片 URL。
-10. 如需发送正文图片，先调用 `eh_download_images` 把正文图片 URL 下载成本地 `file:///` 地址。
-11. 仅当 `eh_download_images.ok=true` 时，把返回项的 `fileUrl` 列表按原顺序传给 `send_forward_images` 合并转发，避免刷屏；若 `ok=false`，停止发送并返回失败原因。
+10. 如需发送正文图片，先调用 `eh_download_images` 把正文图片 URL 下载成本地 `file:///` 地址，并传入 `gallery_url` 或详情页 `referer` 以便结构化缓存；不得把 EH/EX 远端正文图片链接直接传给合并转发工具。
+11. 仅当 `eh_download_images.ok=true` 时，把返回项的 `fileUrl` 列表按原顺序传给 `send_forward_images` 或 `send_forward_images_batches` 合并转发；若需要旋转，也只对这些本地 `fileUrl` 使用 `rotate`。若 `ok=false`，停止发送并返回失败原因。
 12. 返回结构化结果和警告信息。
 
 ## 推荐返回格式

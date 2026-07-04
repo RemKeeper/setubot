@@ -124,6 +124,7 @@ EH/EX 工具默认建议关闭，确认需要后再启用。
 - `ehReq.cookieEnv`：Cookie 环境变量名，默认 `EHENTAI_COOKIE`。
 - `ehReq.cookiePath`：Cookie 文件路径，默认 `.secrets/ehentai.cookies`。
 - `ehReq.proxyURL`：EH/EX 专用代理地址，例如 `http://127.0.0.1:7890`。
+- `ehReq.imageCacheMaxBytes`：EH 正文图片本地缓存总大小上限，默认 `2147483648`。图片按 `eh_image_cache/{gid}/{token}/` 两层目录缓存，超过总大小后优先清理最旧文件。
 
 ## 小红书偏好修改
 

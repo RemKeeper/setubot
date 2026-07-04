@@ -30,10 +30,10 @@ import (
 )
 
 const (
-	maxXHSImages         = 30
-	forwardImageMaxBytes = 80 << 20
-	forwardImageCacheMax = 100
-	forwardImageCacheDir = "forward_image_cache"
+	maxXHSImages              = 30
+	forwardImageMaxBytes      = 80 << 20
+	forwardImageCacheMaxBytes = 512 << 20
+	forwardImageCacheDir      = "forward_image_cache"
 )
 
 type xhsSetuOutput struct {
@@ -300,7 +300,11 @@ func (p *plugin) rotateForwardImages(images []string, degrees int) ([]string, er
 		}
 		rotated = append(rotated, fileURL)
 	}
-	if _, err := cleanupEHImageCache(cacheDir, forwardImageCacheMax); err != nil {
+	maxCacheBytes := p.ehImageCacheMaxBytes()
+	if maxCacheBytes <= 0 {
+		maxCacheBytes = forwardImageCacheMaxBytes
+	}
+	if _, _, _, err := cleanupImageCacheBySize(cacheDir, maxCacheBytes); err != nil {
 		log.Printf("[agent/forward_images] 清理旋转图片缓存失败: %v", err)
 	}
 
