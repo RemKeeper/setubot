@@ -846,6 +846,9 @@ func (p *plugin) callTool(ctx *zero.Ctx, name string, rawArgs string) string {
 	case "send_forward_images":
 		content, err := p.callSendForwardImages(ctx, args)
 		return toolResult(content, err)
+	case "send_forward_images_batches":
+		content, err := p.callSendForwardImageBatches(ctx, args)
+		return toolResult(content, err)
 	case "eh_download_images":
 		content, err := p.callEHDownloadImages(args)
 		return toolResult(content, err)

@@ -133,6 +133,11 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 			"images": arrayStringSchema("图片链接列表，至少 1 个，最多 30 个"),
 			"rotate": enumNumberSchema("可选；顺时针旋转角度，仅支持 90、180、270；不传或传 0 表示不旋转", []int{0, 90, 180, 270}),
 		}, []string{"images"}),
+		functionTool("send_forward_images_batches", "原子化分批发送完整图片列表到当前聊天。适合一次要发送超过 30 张或要求多轮分批发送的长流程；工具会在内部按 batch_size 连续发送全部批次，不需要 agent 再多轮续调。可选 rotate 参数会先把每批图片顺时针旋转后再发送。", map[string]interface{}{
+			"images":     arrayStringSchema("完整图片链接列表，至少 1 个；工具会去重并发送全部图片"),
+			"batch_size": numberSchema("可选；每批最多图片数，默认 30，范围 1-30"),
+			"rotate":     enumNumberSchema("可选；顺时针旋转角度，仅支持 90、180、270；不传或传 0 表示不旋转", []int{0, 90, 180, 270}),
+		}, []string{"images"}),
 		functionTool("eh_download_images", "下载多个 EH/EX 正文图片直链到本地缓存，并返回可传给 send_forward_images 的 file:/// 本地图片地址。下载复用 EH 请求代理配置；本地缓存最多保留 100 张旧图并自动清理。", map[string]interface{}{
 			"images":  arrayStringSchema("图片直链列表，至少 1 个；工具会返回对应 fileUrl"),
 			"referer": stringSchema("可选 Referer，建议传对应详情页或图片页 URL"),

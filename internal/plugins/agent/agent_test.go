@@ -124,3 +124,24 @@ func TestRotateImage90(t *testing.T) {
 		t.Fatalf("blue pixel moved to %v, want %v", got, blue)
 	}
 }
+
+func TestSplitImageBatches(t *testing.T) {
+	batches := splitImageBatches([]string{"a", "b", "c", "d", "e"}, 2)
+	if len(batches) != 3 {
+		t.Fatalf("expected 3 batches, got %d", len(batches))
+	}
+	wants := [][]string{{"a", "b"}, {"c", "d"}, {"e"}}
+	for i := range wants {
+		if len(batches[i]) != len(wants[i]) {
+			t.Fatalf("batch %d length = %d, want %d", i, len(batches[i]), len(wants[i]))
+		}
+		for j := range wants[i] {
+			if batches[i][j] != wants[i][j] {
+				t.Fatalf("batch %d item %d = %q, want %q", i, j, batches[i][j], wants[i][j])
+			}
+		}
+	}
+	if got := splitImageBatches([]string{"a"}, 0); got != nil {
+		t.Fatalf("expected nil for invalid batch size, got %#v", got)
+	}
+}

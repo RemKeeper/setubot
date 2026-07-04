@@ -220,6 +220,29 @@ func (p *plugin) callSendForwardImages(ctx *zero.Ctx, args map[string]interface{
 	return fmt.Sprintf("已合并发送 %d 张图片", len(cleanImageURLs(images, maxXHSImages))), nil
 }
 
+func (p *plugin) callSendForwardImageBatches(ctx *zero.Ctx, args map[string]interface{}) (string, error) {
+	images := cleanImageURLs(stringSliceArg(args, "images"), 0)
+	if len(images) == 0 {
+		return "", fmt.Errorf("图片链接不能为空")
+	}
+	batchSize := clamp(numberArg(args, "batch_size", maxXHSImages), 1, maxXHSImages)
+	rotate, err := normalizeImageRotation(numberArg(args, "rotate", 0))
+	if err != nil {
+		return "", err
+	}
+	batches := splitImageBatches(images, batchSize)
+	for i, batch := range batches {
+		if err := p.sendForwardImages(ctx, batch, nil, rotate); err != nil {
+			return "", fmt.Errorf("第 %d/%d 批发送失败：%w", i+1, len(batches), err)
+		}
+	}
+
+	if rotate != 0 {
+		return fmt.Sprintf("已分 %d 批发送 %d 张图片，每批最多 %d 张，旋转 %d°", len(batches), len(images), batchSize, rotate), nil
+	}
+	return fmt.Sprintf("已分 %d 批发送 %d 张图片，每批最多 %d 张", len(batches), len(images), batchSize), nil
+}
+
 func (p *plugin) sendForwardImages(ctx *zero.Ctx, images []string, prefixNodes message.Message, rotate int) error {
 	images = cleanImageURLs(images, maxXHSImages)
 	if len(images) == 0 {
@@ -399,6 +422,22 @@ func rotateImage(src image.Image, degrees int) *image.NRGBA {
 	}
 
 	return dst
+}
+
+func splitImageBatches(images []string, batchSize int) [][]string {
+	if batchSize <= 0 || len(images) == 0 {
+		return nil
+	}
+	batches := make([][]string, 0, (len(images)+batchSize-1)/batchSize)
+	for start := 0; start < len(images); start += batchSize {
+		end := start + batchSize
+		if end > len(images) {
+			end = len(images)
+		}
+		batches = append(batches, images[start:end])
+	}
+
+	return batches
 }
 
 func (p *plugin) forwardNode(ctx *zero.Ctx, content interface{}) message.Segment {
