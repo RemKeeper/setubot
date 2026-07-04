@@ -36,6 +36,12 @@
     "temperature": 0.5,
     "debug": false,
     "debugLogPath": "data/agent_api_body.log",
+    "taskGuard": {
+      "enabled": false,
+      "maxSteps": 20,
+      "longTaskKeywords": ["分批", "全部", "继续", "直到完成", "所有图片"],
+      "completionPrompt": "当前请求疑似长流程任务。你必须维护任务进度：先判断总目标、已完成项和剩余项；只要仍有未完成项目，就继续调用合适工具推进，不要提前总结或声称完成。若存在可一次完成全部子任务的原子化工具，应优先调用该工具。"
+    },
     "browser": {
       "enabled": false,
       "baseURL": "http://127.0.0.1:58000"

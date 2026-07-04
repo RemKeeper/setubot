@@ -30,27 +30,35 @@ type DrawConfig struct {
 }
 
 type AgentConfig struct {
-	Enabled             bool          `json:"enabled"`
-	BaseURL             string        `json:"baseURL"`
-	APIKey              string        `json:"apiKey"`
-	Model               string        `json:"model"`
-	SystemPrompt        string        `json:"systemPrompt"`
-	SkillDir            string        `json:"skillDir"`
-	MemoryDir           string        `json:"memoryDir"`
-	Timeout             int           `json:"timeout"`
-	MaxToolRounds       int           `json:"maxToolRounds"`
-	MaxContextTurns     int           `json:"maxContextTurns"`
-	SummaryTriggerTurns int           `json:"summaryTriggerTurns"`
-	SummaryKeepTurns    int           `json:"summaryKeepTurns"`
-	ContextTTL          int           `json:"contextTTL"`
-	MaxResponseChars    int           `json:"maxResponseChars"`
-	Temperature         float64       `json:"temperature"`
-	Debug               bool          `json:"debug"`
-	DebugLogPath        string        `json:"debugLogPath"`
-	Browser             BrowserConfig `json:"browser"`
-	Exa                 ExaConfig     `json:"exa"`
-	EHTag               EHTagConfig   `json:"ehTag"`
-	EHReq               EHReqConfig   `json:"ehReq"`
+	Enabled             bool            `json:"enabled"`
+	BaseURL             string          `json:"baseURL"`
+	APIKey              string          `json:"apiKey"`
+	Model               string          `json:"model"`
+	SystemPrompt        string          `json:"systemPrompt"`
+	SkillDir            string          `json:"skillDir"`
+	MemoryDir           string          `json:"memoryDir"`
+	Timeout             int             `json:"timeout"`
+	MaxToolRounds       int             `json:"maxToolRounds"`
+	MaxContextTurns     int             `json:"maxContextTurns"`
+	SummaryTriggerTurns int             `json:"summaryTriggerTurns"`
+	SummaryKeepTurns    int             `json:"summaryKeepTurns"`
+	ContextTTL          int             `json:"contextTTL"`
+	MaxResponseChars    int             `json:"maxResponseChars"`
+	Temperature         float64         `json:"temperature"`
+	Debug               bool            `json:"debug"`
+	DebugLogPath        string          `json:"debugLogPath"`
+	TaskGuard           TaskGuardConfig `json:"taskGuard"`
+	Browser             BrowserConfig   `json:"browser"`
+	Exa                 ExaConfig       `json:"exa"`
+	EHTag               EHTagConfig     `json:"ehTag"`
+	EHReq               EHReqConfig     `json:"ehReq"`
+}
+
+type TaskGuardConfig struct {
+	Enabled          bool     `json:"enabled"`
+	MaxSteps         int      `json:"maxSteps"`
+	LongTaskKeywords []string `json:"longTaskKeywords"`
+	CompletionPrompt string   `json:"completionPrompt"`
 }
 
 type BrowserConfig struct {
@@ -174,6 +182,15 @@ func (cfg AgentConfig) withDefaults() AgentConfig {
 	}
 	if cfg.DebugLogPath == "" {
 		cfg.DebugLogPath = "data/agent_api_body.log"
+	}
+	if cfg.TaskGuard.MaxSteps <= 0 {
+		cfg.TaskGuard.MaxSteps = cfg.MaxToolRounds
+	}
+	if len(cfg.TaskGuard.LongTaskKeywords) == 0 {
+		cfg.TaskGuard.LongTaskKeywords = []string{"分批", "全部", "继续", "直到完成", "所有图片"}
+	}
+	if cfg.TaskGuard.CompletionPrompt == "" {
+		cfg.TaskGuard.CompletionPrompt = "当前请求疑似长流程任务。你必须维护任务进度：先判断总目标、已完成项和剩余项；只要仍有未完成项目，就继续调用合适工具推进，不要提前总结或声称完成。若存在可一次完成全部子任务的原子化工具，应优先调用该工具。"
 	}
 	if cfg.Browser.BaseURL == "" {
 		cfg.Browser.BaseURL = "http://127.0.0.1:58000"

@@ -248,11 +248,19 @@ func (p *plugin) runAgent(ctx *zero.Ctx, prompt string) (string, error) {
 		system += "\n与当前聊天作用域最相关的已保存记忆（已按群聊/私聊隔离，不代表全部记忆）：\n" + memories
 	}
 	system += p.requestIdentityContext(ctx)
+	taskGuardActive := p.taskGuardActive(prompt)
+	maxToolRounds := p.cfg.MaxToolRounds
+	if taskGuardActive {
+		system += "\n长流程任务约束：" + p.cfg.TaskGuard.CompletionPrompt
+		if p.cfg.TaskGuard.MaxSteps > maxToolRounds {
+			maxToolRounds = p.cfg.TaskGuard.MaxSteps
+		}
+	}
 
 	turnMessages := []chatMessage{{Role: openai.ChatMessageRoleUser, Content: prompt}}
 	messages := p.buildMessages(system, sessionKey, turnMessages)
 
-	for i := 0; i <= p.cfg.MaxToolRounds; i++ {
+	for i := 0; i <= maxToolRounds; i++ {
 		resp, err := p.chat(messages)
 		if err != nil {
 			return "", err
@@ -284,6 +292,21 @@ func (p *plugin) runAgent(ctx *zero.Ctx, prompt string) (string, error) {
 	}
 
 	return "", fmt.Errorf("工具调用轮次超过限制")
+}
+
+func (p *plugin) taskGuardActive(prompt string) bool {
+	if !p.cfg.TaskGuard.Enabled {
+		return false
+	}
+	prompt = strings.ToLower(prompt)
+	for _, keyword := range p.cfg.TaskGuard.LongTaskKeywords {
+		keyword = strings.ToLower(strings.TrimSpace(keyword))
+		if keyword != "" && strings.Contains(prompt, keyword) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (p *plugin) sessionKey(ctx *zero.Ctx) string {

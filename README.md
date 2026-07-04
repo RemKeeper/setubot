@@ -92,6 +92,7 @@ go build -o setubot .
 - `skillDir`：skill 目录，默认 `skills`。
 - `memoryDir`：记忆目录，默认 `data/memory`。
 - `maxToolRounds`：单轮最多工具调用轮数。
+- `taskGuard`：长流程任务约束配置；启用后，当用户请求命中关键词时会注入完成度约束提示，并可用 `maxSteps` 提高该轮工具循环上限。
 - `debug`：是否记录请求体到 `debugLogPath`。公开部署建议关闭。
 
 ### `draw`

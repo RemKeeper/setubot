@@ -86,6 +86,21 @@ func TestToolResultReturnsNonEmptySuccess(t *testing.T) {
 	}
 }
 
+func TestTaskGuardActive(t *testing.T) {
+	p := &plugin{}
+	if p.taskGuardActive("请分批发送全部图片") {
+		t.Fatal("expected disabled task guard to stay inactive")
+	}
+	p.cfg.TaskGuard.Enabled = true
+	p.cfg.TaskGuard.LongTaskKeywords = []string{"分批", "直到完成"}
+	if !p.taskGuardActive("请分批发送全部图片") {
+		t.Fatal("expected keyword to activate task guard")
+	}
+	if p.taskGuardActive("普通聊天") {
+		t.Fatal("expected unrelated prompt to stay inactive")
+	}
+}
+
 func TestNormalizeImageRotation(t *testing.T) {
 	for _, degrees := range []int{0, 90, 180, 270} {
 		got, err := normalizeImageRotation(degrees)
