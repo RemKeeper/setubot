@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"image/png"
+	"image/jpeg"
 	"io"
 	"log"
 	"net/http"
@@ -17,7 +17,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	_ "image/gif"
@@ -34,6 +36,7 @@ const (
 	forwardImageMaxBytes      = 80 << 20
 	forwardImageCacheMaxBytes = 512 << 20
 	forwardImageCacheDir      = "forward_image_cache"
+	forwardImageJPEGQuality   = 90
 )
 
 type xhsSetuOutput struct {
@@ -292,13 +295,53 @@ func (p *plugin) rotateForwardImages(images []string, degrees int) ([]string, er
 		return nil, err
 	}
 
-	rotated := make([]string, 0, len(images))
+	rotated := make([]string, len(images))
+	workerCount := runtime.GOMAXPROCS(0)
+	if workerCount < 1 {
+		workerCount = 1
+	}
+	if workerCount > len(images) {
+		workerCount = len(images)
+	}
+	type rotateJob struct {
+		index int
+		url   string
+	}
+	jobs := make(chan rotateJob)
+	errCh := make(chan error, 1)
+	var wg sync.WaitGroup
+	for worker := 0; worker < workerCount; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				fileURL, err := p.rotateForwardImage(job.url, degrees, cacheDir)
+				if err != nil {
+					select {
+					case errCh <- fmt.Errorf("旋转第 %d 张图片失败：%w", job.index+1, err):
+					default:
+					}
+					continue
+				}
+				rotated[job.index] = fileURL
+			}
+		}()
+	}
 	for i, imageURL := range images {
-		fileURL, err := p.rotateForwardImage(imageURL, degrees, cacheDir)
-		if err != nil {
-			return nil, fmt.Errorf("旋转第 %d 张图片失败：%w", i+1, err)
+		select {
+		case err := <-errCh:
+			close(jobs)
+			wg.Wait()
+			return nil, err
+		case jobs <- rotateJob{index: i, url: imageURL}:
 		}
-		rotated = append(rotated, fileURL)
+	}
+	close(jobs)
+	wg.Wait()
+	select {
+	case err := <-errCh:
+		return nil, err
+	default:
 	}
 	maxCacheBytes := p.ehImageCacheMaxBytes()
 	if maxCacheBytes <= 0 {
@@ -323,12 +366,12 @@ func (p *plugin) rotateForwardImage(imageURL string, degrees int, cacheDir strin
 	rotated := rotateImage(img, degrees)
 
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%d", imageURL, degrees, time.Now().UnixNano())))
-	path := filepath.Join(cacheDir, fmt.Sprintf("%x.png", sum[:16]))
+	path := filepath.Join(cacheDir, fmt.Sprintf("%x.jpg", sum[:16]))
 	file, err := os.Create(path)
 	if err != nil {
 		return "", err
 	}
-	encodeErr := png.Encode(file, rotated)
+	encodeErr := jpeg.Encode(file, flattenNRGBAOnWhite(rotated), &jpeg.Options{Quality: forwardImageJPEGQuality})
 	closeErr := file.Close()
 	if encodeErr != nil {
 		_ = os.Remove(path)
@@ -399,6 +442,25 @@ func (p *plugin) downloadForwardImageData(imageURL string) ([]byte, error) {
 }
 
 func rotateImage(src image.Image, degrees int) *image.NRGBA {
+	srcNRGBA := imageToNRGBA(src)
+	return rotateNRGBA(srcNRGBA, degrees)
+}
+
+func imageToNRGBA(src image.Image) *image.NRGBA {
+	if img, ok := src.(*image.NRGBA); ok && img.Rect.Min.X == 0 && img.Rect.Min.Y == 0 && img.Stride == img.Rect.Dx()*4 {
+		return img
+	}
+	bounds := src.Bounds()
+	dst := image.NewNRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
+	for y := 0; y < bounds.Dy(); y++ {
+		for x := 0; x < bounds.Dx(); x++ {
+			dst.Set(x, y, src.At(bounds.Min.X+x, bounds.Min.Y+y))
+		}
+	}
+	return dst
+}
+
+func rotateNRGBA(src *image.NRGBA, degrees int) *image.NRGBA {
 	bounds := src.Bounds()
 	width := bounds.Dx()
 	height := bounds.Dy()
@@ -410,21 +472,49 @@ func rotateImage(src image.Image, degrees int) *image.NRGBA {
 	}
 
 	for y := 0; y < height; y++ {
+		srcRow := src.Pix[y*src.Stride:]
 		for x := 0; x < width; x++ {
-			color := src.At(bounds.Min.X+x, bounds.Min.Y+y)
+			srcOffset := x * 4
+			dstX := x
+			dstY := y
 			switch degrees {
 			case 90:
-				dst.Set(height-1-y, x, color)
+				dstX = height - 1 - y
+				dstY = x
 			case 180:
-				dst.Set(width-1-x, height-1-y, color)
+				dstX = width - 1 - x
+				dstY = height - 1 - y
 			case 270:
-				dst.Set(y, width-1-x, color)
-			default:
-				dst.Set(x, y, color)
+				dstX = y
+				dstY = width - 1 - x
 			}
+			dstOffset := dstY*dst.Stride + dstX*4
+			copy(dst.Pix[dstOffset:dstOffset+4], srcRow[srcOffset:srcOffset+4])
 		}
 	}
 
+	return dst
+}
+
+func flattenNRGBAOnWhite(src *image.NRGBA) *image.NRGBA {
+	dst := image.NewNRGBA(src.Bounds())
+	for y := 0; y < src.Bounds().Dy(); y++ {
+		srcRow := src.Pix[y*src.Stride:]
+		dstRow := dst.Pix[y*dst.Stride:]
+		for x := 0; x < src.Bounds().Dx(); x++ {
+			offset := x * 4
+			a := int(srcRow[offset+3])
+			if a == 255 {
+				copy(dstRow[offset:offset+4], srcRow[offset:offset+4])
+				dstRow[offset+3] = 255
+				continue
+			}
+			dstRow[offset] = uint8((int(srcRow[offset])*a + 255*(255-a)) / 255)
+			dstRow[offset+1] = uint8((int(srcRow[offset+1])*a + 255*(255-a)) / 255)
+			dstRow[offset+2] = uint8((int(srcRow[offset+2])*a + 255*(255-a)) / 255)
+			dstRow[offset+3] = 255
+		}
+	}
 	return dst
 }
 
