@@ -99,16 +99,16 @@ func (p *plugin) callEHDownloadImages(args map[string]interface{}) (string, erro
 			result.Downloaded++
 		} else {
 			result.Failed++
-			result.OK = false
 		}
 		result.Images[i] = item
 	}
-	if !result.OK {
-		result.Warnings = append(result.Warnings, "批次下载未全部成功，已中止返回可发送 fileUrl，避免漫画章节不连贯")
-		cleanupBatchDownloadedImages(result.Images)
-		for i := range result.Images {
-			result.Images[i].FileURL = ""
-			result.Images[i].Path = ""
+	if result.Failed > 0 {
+		result.OK = result.Downloaded > 0
+		if result.Downloaded == 0 {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("全部 %d 张图片下载失败", result.Failed))
+			cleanupBatchDownloadedImages(result.Images)
+		} else {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("%d 张图片下载失败，%d 张已成功缓存可发送；失败的图片可尝试重新下载", result.Failed, result.Downloaded))
 		}
 	}
 
