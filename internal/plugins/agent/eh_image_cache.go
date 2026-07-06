@@ -33,6 +33,7 @@ type ehImageCacheResult struct {
 	GalleryToken  string                       `json:"galleryToken,omitempty"`
 	MaxCacheBytes int64                        `json:"maxCacheBytes"`
 	CacheBytes    int64                        `json:"cacheBytes"`
+	CacheHit      int                          `json:"cacheHit"`
 	Downloaded    int                          `json:"downloaded"`
 	Failed        int                          `json:"failed"`
 	Cleaned       int                          `json:"cleaned"`
@@ -45,6 +46,7 @@ type ehImageCacheResult struct {
 
 type ehImageCacheDownloadResult struct {
 	OK          bool   `json:"ok"`
+	Cached      bool   `json:"cached,omitempty"`
 	URL         string `json:"url"`
 	FileURL     string `json:"fileUrl,omitempty"`
 	Path        string `json:"path,omitempty"`
@@ -97,6 +99,9 @@ func (p *plugin) callEHDownloadImages(args map[string]interface{}) (string, erro
 	for i, item := range items {
 		if item.OK {
 			result.Downloaded++
+			if item.Cached {
+				result.CacheHit++
+			}
 		} else {
 			result.Failed++
 		}
@@ -188,6 +193,19 @@ func (p *plugin) downloadEHImage(ctx context.Context, httpClient *http.Client, e
 	if parsed.Scheme != "https" && parsed.Scheme != "http" {
 		item.Error = "只支持 http/https 图片地址"
 		return item
+	}
+
+	// 缓存命中检查：如果本地已存在同名文件且大小 > 0，直接返回
+	cacheName := cachedEHImageName(imageURL)
+	if matches, _ := filepath.Glob(filepath.Join(cacheDir, cacheName+".*")); len(matches) > 0 {
+		if info, err := os.Stat(matches[0]); err == nil && info.Size() > 0 {
+			item.OK = true
+			item.Cached = true
+			item.Path = matches[0]
+			item.FileURL = (&url.URL{Scheme: "file", Path: matches[0]}).String()
+			item.Size = info.Size()
+			return item
+		}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)

@@ -12,6 +12,7 @@ import (
 	"image/jpeg"
 	"io"
 	"log"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
@@ -364,6 +365,7 @@ func (p *plugin) rotateForwardImage(imageURL string, degrees int, cacheDir strin
 		return "", fmt.Errorf("解码图片失败: %w", err)
 	}
 	rotated := rotateImage(img, degrees)
+	perturbPixels(rotated)
 
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%d", imageURL, degrees, time.Now().UnixNano())))
 	path := filepath.Join(cacheDir, fmt.Sprintf("%x.jpg", sum[:16]))
@@ -516,6 +518,26 @@ func flattenNRGBAOnWhite(src *image.NRGBA) *image.NRGBA {
 		}
 	}
 	return dst
+}
+
+// perturbPixels 对图片像素进行轻微随机扰动（每个 RGB 通道 ±1~2），
+// 肉眼不可见但使输出文件在二进制层面唯一，用于规避平台图片去重。
+func perturbPixels(src *image.NRGBA) {
+	pix := src.Pix
+	n := len(pix)
+	for i := 0; i < n; i += 4 {
+		// 对 R、G、B 各通道施加 [-2, +2] 的随机偏移，跳过 Alpha
+		for c := 0; c < 3; c++ {
+			delta := rand.IntN(5) - 2 // -2, -1, 0, +1, +2
+			v := int(pix[i+c]) + delta
+			if v < 0 {
+				v = 0
+			} else if v > 255 {
+				v = 255
+			}
+			pix[i+c] = uint8(v)
+		}
+	}
 }
 
 func splitImageBatches(images []string, batchSize int) [][]string {
