@@ -1,4 +1,4 @@
-package main
+package agent
 
 import (
 	"bytes"
@@ -12,6 +12,8 @@ import (
 	"image/png"
 	"io"
 	"os"
+
+	_ "golang.org/x/image/webp"
 )
 
 var pngSignature = []byte{137, 80, 78, 71, 13, 10, 26, 10}
