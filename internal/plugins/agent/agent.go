@@ -234,7 +234,6 @@ func (p *plugin) resetContext(ctx *zero.Ctx) {
 
 func (p *plugin) runAgent(ctx *zero.Ctx, prompt string) (string, error) {
 	sessionKey := p.sessionKey(ctx)
-	memories, _ := p.SearchScopedMemory(p.memoryQuery(ctx, prompt, sessionKey), 8, p.memoryAllowedPrefixes(ctx))
 	skills, _ := p.listSkillNames()
 	system := p.cfg.SystemPrompt
 	if system == "" {
@@ -243,9 +242,6 @@ func (p *plugin) runAgent(ctx *zero.Ctx, prompt string) (string, error) {
 	system += "\n长期记忆策略：你只能使用当前聊天作用域内的记忆。群聊记忆按群隔离，不要把不同群的偏好、约定或上下文混用。若用户明确表达稳定偏好、长期事实、后续要遵守的规则或项目约定，应调用 write_memory 保存；若问题可能依赖过往偏好或约定，应主动调用 search_memory 补充检索。不要保存敏感信息、一次性临时信息或未经确认的猜测。"
 	if len(skills) > 0 {
 		system += "\n可用 skills：" + strings.Join(skills, ", ")
-	}
-	if strings.TrimSpace(memories) != "" {
-		system += "\n与当前聊天作用域最相关的已保存记忆（已按群聊/私聊隔离，不代表全部记忆）：\n" + memories
 	}
 	system += p.requestIdentityContext(ctx)
 	taskGuardActive := p.taskGuardActive(prompt)
@@ -276,7 +272,8 @@ func (p *plugin) runAgent(ctx *zero.Ctx, prompt string) (string, error) {
 		if len(msg.ToolCalls) == 0 {
 			p.appendSession(sessionKey, turnMessages)
 			answer := strings.TrimSpace(msg.Content)
-			p.maybeExtractMemory(ctx, prompt, answer, memories)
+			relatedMemories, _ := p.SearchScopedMemory(p.memoryQuery(ctx, prompt, sessionKey), 8, p.memoryAllowedPrefixes(ctx))
+			p.maybeExtractMemory(ctx, prompt, answer, relatedMemories)
 			return answer, nil
 		}
 
