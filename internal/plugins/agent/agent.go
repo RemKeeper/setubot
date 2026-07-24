@@ -270,6 +270,7 @@ func (p *plugin) runAgent(ctx *zero.Ctx, prompt string) (string, error) {
 		}
 
 		msg := normalizeChatMessage(resp.Choices[0].Message)
+		p.debugLogModelMessage(i, msg)
 		messages = append(messages, msg)
 		turnMessages = append(turnMessages, msg)
 		if len(msg.ToolCalls) == 0 {
@@ -280,7 +281,9 @@ func (p *plugin) runAgent(ctx *zero.Ctx, prompt string) (string, error) {
 		}
 
 		for _, call := range msg.ToolCalls {
+			p.debugLogf("[agent/tool] round=%d call_id=%s name=%s args=%s", i, call.ID, call.Function.Name, truncateRunes(call.Function.Arguments, 4000))
 			result := p.callTool(ctx, call.Function.Name, call.Function.Arguments)
+			p.debugLogf("[agent/tool] round=%d call_id=%s name=%s result=%s", i, call.ID, call.Function.Name, truncateRunes(result, 6000))
 			toolMessage := chatMessage{
 				Role:       openai.ChatMessageRoleTool,
 				ToolCallID: call.ID,
@@ -730,10 +733,39 @@ func (p *plugin) chat(messages []chatMessage) (*openai.ChatCompletionResponse, e
 	p.debugLogChatRequest("chat_completion", req)
 	resp, err := p.aiClient.CreateChatCompletion(context.Background(), req)
 	if err != nil {
+		p.debugLogf("[agent/model] chat_completion error=%v", err)
 		return nil, err
 	}
 
 	return &resp, nil
+}
+
+func (p *plugin) debugLogModelMessage(round int, msg chatMessage) {
+	if !p.cfg.Debug {
+		return
+	}
+
+	p.debugLogf("[agent/model] round=%d role=%s reasoning=%s content=%s tool_calls=%s", round, msg.Role,
+		truncateRunes(msg.ReasoningContent, 6000), truncateRunes(msg.Content, 6000), formatToolCalls(msg.ToolCalls))
+}
+
+func formatToolCalls(calls []openai.ToolCall) string {
+	if len(calls) == 0 {
+		return "[]"
+	}
+
+	parts := make([]string, 0, len(calls))
+	for _, call := range calls {
+		parts = append(parts, fmt.Sprintf("%s:%s(%s)", call.ID, call.Function.Name, truncateRunes(call.Function.Arguments, 2000)))
+	}
+	return "[" + strings.Join(parts, "; ") + "]"
+}
+
+func (p *plugin) debugLogf(format string, args ...interface{}) {
+	if !p.cfg.Debug {
+		return
+	}
+	log.Printf(format, args...)
 }
 
 func (p *plugin) debugLogChatRequest(kind string, req openai.ChatCompletionRequest) {
