@@ -314,15 +314,31 @@ func (p *plugin) browserRequest(method string, path string, body io.Reader) (str
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	limit := p.cfg.Browser.MaxResponseBytes
+	if limit <= 0 {
+		limit = 256 << 10
+	}
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return "", err
+	}
+	truncated := int64(len(respBody)) > limit
+	if truncated {
+		respBody = respBody[:limit]
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return "", fmt.Errorf("浏览器接口返回 %d：%s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 
-	return strings.TrimSpace(string(respBody)), nil
+	result := strings.TrimSpace(string(respBody))
+	if path == "/api/screenshot" {
+		return fmt.Sprintf("截图已获取，但为避免把 base64 注入模型上下文，已省略图片正文（接口响应字节数至少 %d）。如需页面信息，请使用 HTML 或 evaluate 提取结构化文本。", len(respBody)), nil
+	}
+	result = truncateRunes(result, p.cfg.Browser.MaxResultChars)
+	if truncated {
+		result += fmt.Sprintf("\n[浏览器响应已在 %d 字节处截断]", limit)
+	}
+	return result, nil
 }
 
 func (p *plugin) toolDefinitions() []openai.Tool {
@@ -458,17 +474,22 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 		return tools
 	}
 
-	browserTools := []openai.Tool{
+	return append(tools, functionTool("browser_task", "使用隔离的浏览器子代理完成多步网页操作。子代理独立维护临时上下文，HTML、evaluate 等中间结果不会进入主对话历史；只返回简洁的最终结果。", map[string]interface{}{
+		"goal":      stringSchema("要完成的浏览器任务、需要提取的信息及成功条件"),
+		"start_url": stringSchema("可选起始 URL；未填写时从浏览器当前页面开始"),
+	}, []string{"goal"}))
+}
+
+func browserToolDefinitions() []openai.Tool {
+	return []openai.Tool{
 		functionTool("browser_goto", "让浏览器访问指定 URL。", map[string]interface{}{"url": stringSchema("要访问的完整 URL")}, []string{"url"}),
 		functionTool("browser_click", "点击页面上的 CSS 选择器。", map[string]interface{}{"selector": stringSchema("CSS 选择器"), "force": boolSchema("是否强制点击")}, []string{"selector"}),
 		functionTool("browser_type", "在页面元素中输入文本。", map[string]interface{}{"selector": stringSchema("CSS 选择器"), "text": stringSchema("输入文本"), "delay": numberSchema("输入延迟毫秒")}, []string{"selector", "text"}),
-		functionTool("browser_html", "获取当前页面 HTML。", map[string]interface{}{}, []string{}),
-		functionTool("browser_screenshot", "获取当前页面截图 base64。", map[string]interface{}{}, []string{}),
-		functionTool("browser_evaluate", "在当前页面执行 JavaScript 表达式。", map[string]interface{}{"expression": stringSchema("JavaScript 表达式")}, []string{"expression"}),
+		functionTool("browser_html", "获取当前页面 HTML。响应会受字符预算限制；应优先使用 evaluate 提取小型结构化结果。", map[string]interface{}{}, []string{}),
+		functionTool("browser_screenshot", "触发当前页面截图。base64 正文不会注入上下文，仅返回执行状态。", map[string]interface{}{}, []string{}),
+		functionTool("browser_evaluate", "在当前页面执行 JavaScript 表达式。必须只返回完成任务所需的小型字符串或 JSON，不要返回完整 DOM、base64 或大型数组。", map[string]interface{}{"expression": stringSchema("JavaScript 表达式")}, []string{"expression"}),
 		functionTool("browser_scroll", "滚动当前页面。", map[string]interface{}{"direction": enumSchema("滚动方向", []string{"down", "up"}), "distance": numberSchema("滚动像素")}, []string{}),
 	}
-
-	return append(tools, browserTools...)
 }
 
 func functionTool(name string, description string, properties map[string]interface{}, required []string) openai.Tool {

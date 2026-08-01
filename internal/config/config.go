@@ -40,6 +40,8 @@ type AgentConfig struct {
 	Timeout             int                `json:"timeout"`
 	MaxToolRounds       int                `json:"maxToolRounds"`
 	MaxContextTurns     int                `json:"maxContextTurns"`
+	MaxContextChars     int                `json:"maxContextChars"`
+	MaxToolResultChars  int                `json:"maxToolResultChars"`
 	SummaryTriggerTurns int                `json:"summaryTriggerTurns"`
 	SummaryKeepTurns    int                `json:"summaryKeepTurns"`
 	ContextTTL          int                `json:"contextTTL"`
@@ -68,8 +70,11 @@ type TaskGuardConfig struct {
 }
 
 type BrowserConfig struct {
-	Enabled bool   `json:"enabled"`
-	BaseURL string `json:"baseURL"`
+	Enabled          bool   `json:"enabled"`
+	BaseURL          string `json:"baseURL"`
+	MaxResponseBytes int64  `json:"maxResponseBytes"`
+	MaxResultChars   int    `json:"maxResultChars"`
+	MaxSubagentSteps int    `json:"maxSubagentSteps"`
 }
 
 type ExaConfig struct {
@@ -175,6 +180,12 @@ func (cfg AgentConfig) withDefaults() AgentConfig {
 	if cfg.MaxContextTurns <= 0 {
 		cfg.MaxContextTurns = 10
 	}
+	if cfg.MaxContextChars <= 0 {
+		cfg.MaxContextChars = 300000
+	}
+	if cfg.MaxToolResultChars <= 0 {
+		cfg.MaxToolResultChars = 60000
+	}
 	if cfg.SummaryTriggerTurns <= 0 {
 		cfg.SummaryTriggerTurns = 8
 	}
@@ -204,6 +215,15 @@ func (cfg AgentConfig) withDefaults() AgentConfig {
 	}
 	if cfg.Browser.BaseURL == "" {
 		cfg.Browser.BaseURL = "http://127.0.0.1:58000"
+	}
+	if cfg.Browser.MaxResponseBytes <= 0 {
+		cfg.Browser.MaxResponseBytes = 256 << 10
+	}
+	if cfg.Browser.MaxResultChars <= 0 {
+		cfg.Browser.MaxResultChars = 40000
+	}
+	if cfg.Browser.MaxSubagentSteps <= 0 {
+		cfg.Browser.MaxSubagentSteps = 12
 	}
 	if cfg.Exa.BaseURL == "" {
 		cfg.Exa.BaseURL = "https://api.exa.ai"

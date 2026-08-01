@@ -92,6 +92,8 @@ go build -o setubot .
 - `skillDir`：skill 目录，默认 `skills`。
 - `memoryDir`：记忆目录，默认 `data/memory`。
 - `maxToolRounds`：单轮最多工具调用轮数。
+- `maxContextChars`：发送给模型的消息字符预算，默认 `300000`；超出后优先丢弃较早历史，作为 token 上限前的安全闸门。
+- `maxToolResultChars`：单条工具结果字符上限，默认 `60000`；避免大型 HTML、JSON 等进入模型上下文。
 - `taskGuard`：长流程任务约束配置；启用后，当用户请求命中关键词时会注入完成度约束提示，并可用 `maxSteps` 提高该轮工具循环上限。
 - `debug`：是否记录请求体到 `debugLogPath`。公开部署建议关闭。
 
@@ -107,6 +109,11 @@ go build -o setubot .
 
 - `agent.browser.enabled`：是否允许 Agent 调用浏览器工具。
 - `agent.browser.baseURL`：Camoufox API 地址，默认 `http://127.0.0.1:58000`。
+- `agent.browser.maxResponseBytes`：浏览器 HTTP 响应读取上限，默认 `262144` 字节。
+- `agent.browser.maxResultChars`：浏览器子代理内部单次结果和最终摘要的字符上限，默认 `40000`。
+- `agent.browser.maxSubagentSteps`：一次浏览器子代理任务的最大步骤数，默认 `12`。
+
+主 Agent 只暴露 `browser_task`。具体的 goto/click/type/evaluate 等操作由独立、短生命周期的浏览器子代理执行，中间 HTML 和工具消息不会保存到主对话历史；截图 base64 也不会注入模型上下文。
 
 ### `exa`
 

@@ -39,6 +39,7 @@ type plugin struct {
 	ehTags     *ehTagStore
 	sessions   map[string]*conversationSession
 	sessionM   sync.Mutex
+	browserM   sync.Mutex
 }
 
 type conversationSession struct {
@@ -279,7 +280,7 @@ func (p *plugin) runAgent(ctx *zero.Ctx, prompt string) (string, error) {
 
 		for _, call := range msg.ToolCalls {
 			p.debugLogf("[agent/tool] round=%d call_id=%s name=%s args=%s", i, call.ID, call.Function.Name, truncateRunes(call.Function.Arguments, 4000))
-			result := p.callTool(ctx, call.Function.Name, call.Function.Arguments)
+			result := p.compactToolResult(call.Function.Name, p.callTool(ctx, call.Function.Name, call.Function.Arguments), p.cfg.MaxToolResultChars)
 			p.debugLogf("[agent/tool] round=%d call_id=%s name=%s result=%s", i, call.ID, call.Function.Name, truncateRunes(result, 6000))
 			toolMessage := chatMessage{
 				Role:       openai.ChatMessageRoleTool,
@@ -445,7 +446,7 @@ func (p *plugin) buildMessages(system string, sessionKey string, turnMessages []
 	messages = append(messages, normalizeChatMessages(history)...)
 	messages = append(messages, normalizeChatMessages(turnMessages)...)
 
-	return messages
+	return fitMessagesToCharBudget(messages, p.cfg.MaxContextChars)
 }
 
 func (p *plugin) sessionHistory(sessionKey string) (string, []chatMessage) {
@@ -465,6 +466,7 @@ func (p *plugin) sessionHistory(sessionKey string) (string, []chatMessage) {
 }
 
 func (p *plugin) appendSession(sessionKey string, messages []chatMessage) {
+	messages = compactMessagesForSession(messages)
 	p.sessionM.Lock()
 	session, ok := p.sessions[sessionKey]
 	if !ok {
@@ -619,7 +621,7 @@ func (p *plugin) extractMemory(ctx *zero.Ctx, userPrompt string, assistantAnswer
 func renderMessagesForSummary(messages []chatMessage) string {
 	parts := make([]string, 0, len(messages))
 	for _, msg := range messages {
-		content := strings.TrimSpace(msg.Content)
+		content := strings.TrimSpace(truncateRunes(msg.Content, 4000))
 		if content == "" && len(msg.ToolCalls) > 0 {
 			calls := make([]string, 0, len(msg.ToolCalls))
 			for _, call := range msg.ToolCalls {
@@ -653,6 +655,73 @@ func trimContextMessages(messages []chatMessage, maxTurns int) []chatMessage {
 
 	trimmed := append([]chatMessage(nil), messages[len(messages)-maxMessages:]...)
 	return sanitizeToolMessagePairs(trimmed)
+}
+
+func compactMessagesForSession(messages []chatMessage) []chatMessage {
+	compacted := append([]chatMessage(nil), messages...)
+	for i := range compacted {
+		if compacted[i].Role == openai.ChatMessageRoleTool {
+			compacted[i].Content = truncateRunes(compacted[i].Content, 4000)
+		}
+		if compacted[i].ReasoningContent != "" {
+			compacted[i].ReasoningContent = ""
+		}
+	}
+	return normalizeChatMessages(compacted)
+}
+
+func fitMessagesToCharBudget(messages []chatMessage, maxChars int) []chatMessage {
+	if maxChars <= 0 || chatMessagesChars(messages) <= maxChars {
+		return normalizeChatMessages(messages)
+	}
+	if len(messages) == 0 {
+		return nil
+	}
+
+	first := messages[0]
+	remainingBudget := maxChars - len([]rune(first.Content))
+	if remainingBudget <= 0 {
+		first.Content = truncateRunes(first.Content, maxChars)
+		return []chatMessage{normalizeChatMessage(first)}
+	}
+
+	kept := make([]chatMessage, 0, len(messages))
+	used := 0
+	for i := len(messages) - 1; i >= 1; i-- {
+		msg := messages[i]
+		size := chatMessageChars(msg)
+		if size > remainingBudget && len(kept) == 0 {
+			msg.Content = truncateRunes(msg.Content, remainingBudget)
+			size = chatMessageChars(msg)
+		}
+		if used+size > remainingBudget {
+			continue
+		}
+		kept = append(kept, msg)
+		used += size
+	}
+	for i, j := 0, len(kept)-1; i < j; i, j = i+1, j-1 {
+		kept[i], kept[j] = kept[j], kept[i]
+	}
+	kept = sanitizeToolMessagePairs(kept)
+	result := append([]chatMessage{first}, kept...)
+	return normalizeChatMessages(result)
+}
+
+func chatMessagesChars(messages []chatMessage) int {
+	total := 0
+	for _, msg := range messages {
+		total += chatMessageChars(msg)
+	}
+	return total
+}
+
+func chatMessageChars(msg chatMessage) int {
+	total := len([]rune(msg.Content)) + len([]rune(msg.ReasoningContent)) + 32
+	for _, call := range msg.ToolCalls {
+		total += len([]rune(call.Function.Name)) + len([]rune(call.Function.Arguments)) + 32
+	}
+	return total
 }
 
 func normalizeChatMessages(messages []chatMessage) []chatMessage {
@@ -720,14 +789,18 @@ func sanitizeToolMessagePairs(messages []chatMessage) []chatMessage {
 }
 
 func (p *plugin) chat(messages []chatMessage) (*openai.ChatCompletionResponse, error) {
+	return p.chatWithTools("chat_completion", fitMessagesToCharBudget(messages, p.cfg.MaxContextChars), p.toolDefinitions())
+}
+
+func (p *plugin) chatWithTools(kind string, messages []chatMessage, tools []openai.Tool) (*openai.ChatCompletionResponse, error) {
 	req := openai.ChatCompletionRequest{
 		Model:       p.cfg.Model,
 		Messages:    messages,
-		Tools:       p.toolDefinitions(),
+		Tools:       tools,
 		ToolChoice:  "auto",
 		Temperature: float32(p.cfg.Temperature),
 	}
-	p.debugLogChatRequest("chat_completion", req)
+	p.debugLogChatRequest(kind, req)
 	resp, err := p.aiClient.CreateChatCompletion(context.Background(), req)
 	if err != nil {
 		p.debugLogf("[agent/model] chat_completion error=%v", err)
@@ -931,12 +1004,20 @@ func (p *plugin) callTool(ctx *zero.Ctx, name string, rawArgs string) string {
 	case "exa_search":
 		content, err := p.callExaSearch(args)
 		return toolResult(content, err)
-	case "browser_goto", "browser_click", "browser_type", "browser_html", "browser_screenshot", "browser_evaluate", "browser_scroll":
-		content, err := p.callBrowser(name, args)
+	case "browser_task":
+		content, err := p.runBrowserSubagent(stringArg(args, "goal"), stringArg(args, "start_url"))
 		return toolResult(content, err)
 	default:
 		return "未知工具：" + name
 	}
+}
+
+func (p *plugin) compactToolResult(name string, content string, maxChars int) string {
+	if maxChars <= 0 || len([]rune(content)) <= maxChars {
+		return content
+	}
+	originalChars := len([]rune(content))
+	return fmt.Sprintf("%s\n[工具结果已截断：tool=%s，原始字符数=%d，上限=%d]", truncateRunes(content, maxChars), name, originalChars, maxChars)
 }
 
 func toolResult(content string, err error) string {

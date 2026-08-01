@@ -29,6 +29,8 @@
     "timeout": 120,
     "maxToolRounds": 20,
     "maxContextTurns": 10,
+    "maxContextChars": 300000,
+    "maxToolResultChars": 60000,
     "summaryTriggerTurns": 8,
     "summaryKeepTurns": 4,
     "contextTTL": 3600,
@@ -48,7 +50,10 @@
     },
     "browser": {
       "enabled": false,
-      "baseURL": "http://127.0.0.1:58000"
+      "baseURL": "http://127.0.0.1:58000",
+      "maxResponseBytes": 262144,
+      "maxResultChars": 40000,
+      "maxSubagentSteps": 12
     },
     "exa": {
       "enabled": false,

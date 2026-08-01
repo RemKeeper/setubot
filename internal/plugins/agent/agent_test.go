@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -19,6 +20,43 @@ func TestSanitizeToolMessagePairsDropsOrphanTool(t *testing.T) {
 	}
 	if cleaned[0].Role != openai.ChatMessageRoleUser || cleaned[1].Content != "second" {
 		t.Fatalf("unexpected cleaned messages: %#v", cleaned)
+	}
+}
+
+func TestCompactMessagesForSessionTruncatesToolResult(t *testing.T) {
+	messages := []chatMessage{{Role: openai.ChatMessageRoleTool, ToolCallID: "call_1", Content: strings.Repeat("x", 10000)}}
+	compacted := compactMessagesForSession(messages)
+	if len([]rune(compacted[0].Content)) > 4003 {
+		t.Fatalf("tool result was not compacted: %d chars", len([]rune(compacted[0].Content)))
+	}
+}
+
+func TestFitMessagesToCharBudgetDropsOldLargeToolGroup(t *testing.T) {
+	messages := []chatMessage{
+		{Role: openai.ChatMessageRoleSystem, Content: "system"},
+		{Role: openai.ChatMessageRoleAssistant, Content: " ", ToolCalls: []openai.ToolCall{{ID: "old"}}},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "old", Content: strings.Repeat("x", 10000)},
+		{Role: openai.ChatMessageRoleUser, Content: "latest question"},
+	}
+	fitted := fitMessagesToCharBudget(messages, 1000)
+	if chatMessagesChars(fitted) > 1000 {
+		t.Fatalf("messages exceed budget: %d", chatMessagesChars(fitted))
+	}
+	if fitted[len(fitted)-1].Content != "latest question" {
+		t.Fatalf("latest message was not preserved: %#v", fitted)
+	}
+	for _, msg := range fitted {
+		if msg.ToolCallID == "old" {
+			t.Fatal("old oversized tool result should have been dropped")
+		}
+	}
+}
+
+func TestCompactToolResultAddsTruncationNotice(t *testing.T) {
+	p := &plugin{}
+	result := p.compactToolResult("browser_html", strings.Repeat("a", 100), 20)
+	if !strings.Contains(result, "工具结果已截断") || !strings.Contains(result, "browser_html") {
+		t.Fatalf("missing truncation metadata: %q", result)
 	}
 }
 
