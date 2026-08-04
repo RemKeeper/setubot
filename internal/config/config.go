@@ -67,6 +67,7 @@ type VisionConfig struct {
 	SystemPrompt   string  `json:"systemPrompt"`
 	Detail         string  `json:"detail"`
 	MaxImages      int     `json:"maxImages"`
+	MaxImageBytes  int64   `json:"maxImageBytes"`
 	MaxResultChars int     `json:"maxResultChars"`
 	Temperature    float64 `json:"temperature"`
 }
@@ -241,6 +242,9 @@ func (cfg AgentConfig) withDefaults() AgentConfig {
 	}
 	if cfg.Vision.MaxImages <= 0 {
 		cfg.Vision.MaxImages = 8
+	}
+	if cfg.Vision.MaxImageBytes <= 0 {
+		cfg.Vision.MaxImageBytes = 20 << 20
 	}
 	if cfg.Vision.MaxResultChars <= 0 {
 		cfg.Vision.MaxResultChars = 12000

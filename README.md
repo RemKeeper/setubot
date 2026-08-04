@@ -101,6 +101,7 @@ go build -o setubot .
 - `vision.systemPrompt`：视觉模型的系统提示词。
 - `vision.detail`：OpenAI 兼容视觉接口的图片细节级别，可选 `auto`、`low`、`high`，无效值按 `auto` 处理。
 - `vision.maxImages`：单次识图最多传入的图片数量，默认 `8`；先取引用消息图片，再取当前消息图片，并自动去重。
+- `vision.maxImageBytes`：单张远程图片下载大小上限，默认 `20971520`（20 MiB）。工具会由机器人本地下载 HTTP(S) 图片，校验类型后转换为 Base64 Data URL，再发送给视觉模型，避免模型侧访问 QQ 临时链接时触发防盗链。
 - `vision.maxResultChars`：视觉模型结果返回主对话前的字符上限，默认 `12000`。
 - `vision.temperature`：视觉模型温度，建议使用较低值以减少识别结果臆测。
 - `taskGuard`：长流程任务约束配置；启用后，当用户请求命中关键词时会注入完成度约束提示，并可用 `maxSteps` 提高该轮工具循环上限。
