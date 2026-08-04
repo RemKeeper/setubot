@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"log"
 	"net/http"
 	"os"
@@ -18,6 +19,7 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 	zero "github.com/wdvxdr1123/ZeroBot"
+	"github.com/wdvxdr1123/ZeroBot/message"
 )
 
 var (
@@ -93,10 +95,10 @@ func Register(cfg config.AgentConfig, nickNames []string, superUsers []int64) {
 
 func (p *plugin) isTriggerMessage(ctx *zero.Ctx) bool {
 	if ctx.Event.GroupID != 0 {
-		return zero.OnlyToMe(ctx)
+		return zero.OnlyToMe(ctx) && p.hasAgentInput(ctx)
 	}
 
-	return strings.TrimSpace(ctx.ExtractPlainText()) != ""
+	return p.hasAgentInput(ctx)
 }
 
 func openAIBaseURL(baseURL string) string {
@@ -180,10 +182,10 @@ func (p *plugin) extractCommand(ctx *zero.Ctx) (string, bool) {
 	text := strings.TrimSpace(ctx.ExtractPlainText())
 	if ctx.Event.GroupID != 0 {
 		command := strings.TrimLeft(text, " \t\r\n,，:：")
-		return command, command != ""
+		return command, command != "" || (p.cfg.Vision.Enabled && hasMessageImages(ctx.Event.Message)) || replyMessageID(ctx.Event.Message) != ""
 	}
 
-	return text, text != ""
+	return text, text != "" || (p.cfg.Vision.Enabled && hasMessageImages(ctx.Event.Message)) || replyMessageID(ctx.Event.Message) != ""
 }
 
 func (p *plugin) isHelpText(command string) bool {
@@ -208,7 +210,16 @@ func (p *plugin) agentCommand(ctx *zero.Ctx, prompt string) {
 		ctx.Send("Agent 接口 API Key 未配置")
 		return
 	}
-	if strings.TrimSpace(prompt) == "" {
+	if !p.cfg.Vision.Enabled && strings.TrimSpace(prompt) == "" {
+		if replyID := replyMessageID(ctx.Event.Message); replyID != "" {
+			replied := ctx.GetMessage(replyID, true)
+			if strings.TrimSpace(messagePlainText(replied.Elements)) == "" && hasMessageImages(replied.Elements) {
+				ctx.Send("Agent 识图功能未启用，请在 agent.vision.enabled 中开启")
+				return
+			}
+		}
+	}
+	if strings.TrimSpace(prompt) == "" && !(p.cfg.Vision.Enabled && hasMessageImages(ctx.Event.Message)) && replyMessageID(ctx.Event.Message) == "" {
 		ctx.Send("请输入 agent 问题")
 		return
 	}
@@ -254,7 +265,7 @@ func (p *plugin) runAgent(ctx *zero.Ctx, prompt string) (string, error) {
 		}
 	}
 
-	turnMessages := []chatMessage{{Role: openai.ChatMessageRoleUser, Content: prompt}}
+	turnMessages := []chatMessage{p.userChatMessage(ctx, prompt)}
 	messages := p.buildMessages(system, sessionKey, turnMessages)
 
 	for i := 0; i <= maxToolRounds; i++ {
@@ -293,6 +304,159 @@ func (p *plugin) runAgent(ctx *zero.Ctx, prompt string) (string, error) {
 	}
 
 	return "", fmt.Errorf("工具调用轮次超过限制")
+}
+
+func (p *plugin) hasAgentInput(ctx *zero.Ctx) bool {
+	return strings.TrimSpace(ctx.ExtractPlainText()) != "" || (p.cfg.Vision.Enabled && hasMessageImages(ctx.Event.Message)) || replyMessageID(ctx.Event.Message) != ""
+}
+
+func (p *plugin) userChatMessage(ctx *zero.Ctx, prompt string) chatMessage {
+	parts := make([]openai.ChatMessagePart, 0)
+	if replyID := replyMessageID(ctx.Event.Message); replyID != "" {
+		replied := ctx.GetMessage(replyID, true)
+		repliedParts := p.messageParts(replied.Elements)
+		if len(repliedParts) > 0 {
+			parts = append(parts, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: "以下是用户引用的消息：\n"})
+			parts = append(parts, repliedParts...)
+			parts = append(parts, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: "\n以下是用户当前发送的消息：\n"})
+		}
+	}
+	parts = append(parts, p.messagePartsWithPrompt(ctx.Event.Message, prompt)...)
+	if len(parts) == 0 {
+		return chatMessage{Role: openai.ChatMessageRoleUser, Content: prompt}
+	}
+	if strings.TrimSpace(multiContentText(parts)) == "" && !multiContentHasImage(parts) {
+		return chatMessage{Role: openai.ChatMessageRoleUser, Content: prompt}
+	}
+
+	return chatMessage{Role: openai.ChatMessageRoleUser, MultiContent: parts}
+}
+
+func (p *plugin) messageParts(msg message.Message) []openai.ChatMessagePart {
+	return p.messagePartsWithPrompt(msg, "")
+}
+
+func (p *plugin) messagePartsWithPrompt(msg message.Message, prompt string) []openai.ChatMessagePart {
+	if strings.TrimSpace(prompt) == "" || strings.TrimSpace(messagePlainText(msg)) == strings.TrimSpace(prompt) {
+		return p.messagePartsRaw(msg)
+	}
+
+	parts := p.messagePartsRaw(msg)
+	result := make([]openai.ChatMessagePart, 0, len(parts))
+	textAdded := false
+	for _, part := range parts {
+		if part.Type == openai.ChatMessagePartTypeText {
+			if !textAdded {
+				result = append(result, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: prompt})
+				textAdded = true
+			}
+			continue
+		}
+		result = append(result, part)
+	}
+	if !textAdded {
+		result = append(result, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: prompt})
+	}
+	return result
+}
+
+func (p *plugin) messagePartsRaw(msg message.Message) []openai.ChatMessagePart {
+	parts := make([]openai.ChatMessagePart, 0, len(msg))
+	for _, segment := range msg {
+		switch segment.Type {
+		case "text":
+			text := segment.Data["text"]
+			if text != "" {
+				parts = append(parts, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: text})
+			}
+		case "image":
+			if !p.cfg.Vision.Enabled {
+				continue
+			}
+			source := agentImageSource(segment)
+			if source != "" {
+				parts = append(parts, openai.ChatMessagePart{
+					Type:     openai.ChatMessagePartTypeImageURL,
+					ImageURL: &openai.ChatMessageImageURL{URL: source, Detail: p.visionDetail()},
+				})
+			}
+		}
+	}
+	return parts
+}
+
+func (p *plugin) visionDetail() openai.ImageURLDetail {
+	switch strings.ToLower(strings.TrimSpace(p.cfg.Vision.Detail)) {
+	case "low":
+		return openai.ImageURLDetailLow
+	case "high":
+		return openai.ImageURLDetailHigh
+	default:
+		return openai.ImageURLDetailAuto
+	}
+}
+
+func messagePlainText(msg message.Message) string {
+	var b strings.Builder
+	for _, segment := range msg {
+		if segment.Type == "text" {
+			b.WriteString(segment.Data["text"])
+		}
+	}
+	return b.String()
+}
+
+func hasMessageImages(msg message.Message) bool {
+	for _, segment := range msg {
+		if segment.Type == "image" && agentImageSource(segment) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func replyMessageID(msg message.Message) string {
+	for _, segment := range msg {
+		if segment.Type == "reply" {
+			return strings.TrimSpace(segment.Data["id"])
+		}
+	}
+	return ""
+}
+
+func multiContentText(parts []openai.ChatMessagePart) string {
+	var b strings.Builder
+	for _, part := range parts {
+		if part.Type == openai.ChatMessagePartTypeText {
+			b.WriteString(part.Text)
+		}
+	}
+	return b.String()
+}
+
+func multiContentHasImage(parts []openai.ChatMessagePart) bool {
+	for _, part := range parts {
+		if part.Type == openai.ChatMessagePartTypeImageURL && part.ImageURL != nil && strings.TrimSpace(part.ImageURL.URL) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func agentImageSource(segment message.Segment) string {
+	for _, key := range []string{"url", "file"} {
+		source := strings.TrimSpace(segment.Data[key])
+		source = strings.ReplaceAll(source, "&amp;", "&")
+		source = html.UnescapeString(source)
+		if strings.HasPrefix(source, "base64://") {
+			return "data:image/jpeg;base64," + strings.TrimPrefix(source, "base64://")
+		}
+		if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") ||
+			strings.HasPrefix(source, "data:image/") {
+			return source
+		}
+	}
+	return ""
 }
 
 func (p *plugin) taskGuardActive(prompt string) bool {
@@ -363,7 +527,7 @@ func recentUserMessages(messages []chatMessage, limit int) []string {
 		if msg.Role != openai.ChatMessageRoleUser {
 			continue
 		}
-		content := strings.TrimSpace(msg.Content)
+		content := strings.TrimSpace(chatMessageDisplayText(msg))
 		if content != "" {
 			result = append(result, content)
 		}
@@ -621,7 +785,7 @@ func (p *plugin) extractMemory(ctx *zero.Ctx, userPrompt string, assistantAnswer
 func renderMessagesForSummary(messages []chatMessage) string {
 	parts := make([]string, 0, len(messages))
 	for _, msg := range messages {
-		content := strings.TrimSpace(truncateRunes(msg.Content, 4000))
+		content := strings.TrimSpace(truncateRunes(chatMessageDisplayText(msg), 4000))
 		if content == "" && len(msg.ToolCalls) > 0 {
 			calls := make([]string, 0, len(msg.ToolCalls))
 			for _, call := range msg.ToolCalls {
@@ -718,10 +882,38 @@ func chatMessagesChars(messages []chatMessage) int {
 
 func chatMessageChars(msg chatMessage) int {
 	total := len([]rune(msg.Content)) + len([]rune(msg.ReasoningContent)) + 32
+	for _, part := range msg.MultiContent {
+		switch part.Type {
+		case openai.ChatMessagePartTypeText:
+			total += len([]rune(part.Text))
+		case openai.ChatMessagePartTypeImageURL:
+			total += 256
+		}
+	}
 	for _, call := range msg.ToolCalls {
 		total += len([]rune(call.Function.Name)) + len([]rune(call.Function.Arguments)) + 32
 	}
 	return total
+}
+
+func chatMessageDisplayText(msg chatMessage) string {
+	if strings.TrimSpace(msg.Content) != "" {
+		return msg.Content
+	}
+	if len(msg.MultiContent) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	for _, part := range msg.MultiContent {
+		switch part.Type {
+		case openai.ChatMessagePartTypeText:
+			b.WriteString(part.Text)
+		case openai.ChatMessagePartTypeImageURL:
+			b.WriteString("[图片]")
+		}
+	}
+	return b.String()
 }
 
 func normalizeChatMessages(messages []chatMessage) []chatMessage {

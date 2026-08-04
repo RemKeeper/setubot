@@ -45,6 +45,7 @@ cp config.example.json config.json
 - `agent.apiKey`：OpenAI 兼容接口密钥。
 - `agent.baseURL`：OpenAI 兼容接口地址，例如 `https://api.openai.com` 或本地代理地址。
 - `agent.model`：聊天模型名。
+- `agent.vision.enabled`：是否把 QQ 消息及引用消息中的图片发送给视觉模型。
 
 4. 启动 OneBot 端
 
@@ -94,6 +95,8 @@ go build -o setubot .
 - `maxToolRounds`：单轮最多工具调用轮数。
 - `maxContextChars`：发送给模型的消息字符预算，默认 `300000`；超出后优先丢弃较早历史，作为 token 上限前的安全闸门。
 - `maxToolResultChars`：单条工具结果字符上限，默认 `60000`；避免大型 HTML、JSON 等进入模型上下文。
+- `vision.enabled`：是否启用图片输入。开启后支持私聊图片、群聊 `@机器人 + 图片`，以及回复图文消息提问；模型本身也必须支持视觉输入。
+- `vision.detail`：OpenAI 兼容视觉接口的图片细节级别，可选 `auto`、`low`、`high`，无效值按 `auto` 处理。
 - `taskGuard`：长流程任务约束配置；启用后，当用户请求命中关键词时会注入完成度约束提示，并可用 `maxSteps` 提高该轮工具循环上限。
 - `debug`：是否记录请求体到 `debugLogPath`。公开部署建议关闭。
 

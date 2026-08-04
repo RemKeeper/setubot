@@ -38,6 +38,10 @@
     "temperature": 0.5,
     "debug": false,
     "debugLogPath": "data/agent_api_body.log",
+    "vision": {
+      "enabled": true,
+      "detail": "auto"
+    },
     "taskGuard": {
       "enabled": false,
       "maxSteps": 20,

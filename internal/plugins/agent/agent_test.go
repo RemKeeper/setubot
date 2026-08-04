@@ -4,8 +4,75 @@ import (
 	"strings"
 	"testing"
 
+	"setubot/internal/config"
+
 	openai "github.com/sashabaranov/go-openai"
+	"github.com/wdvxdr1123/ZeroBot/message"
 )
+
+func TestMessagePartsPreservesTextImageOrder(t *testing.T) {
+	p := &plugin{cfg: config.AgentConfig{Vision: config.VisionConfig{Enabled: true, Detail: "high"}}}
+	msg := message.Message{
+		message.Text("before"),
+		{Type: "image", Data: map[string]string{"url": "https://example.com/a.jpg"}},
+		message.Text("after"),
+	}
+
+	parts := p.messageParts(msg)
+	if len(parts) != 3 {
+		t.Fatalf("expected 3 parts, got %d", len(parts))
+	}
+	if parts[0].Text != "before" || parts[1].Type != openai.ChatMessagePartTypeImageURL || parts[2].Text != "after" {
+		t.Fatalf("unexpected multimodal parts: %#v", parts)
+	}
+	if parts[1].ImageURL == nil || parts[1].ImageURL.URL != "https://example.com/a.jpg" {
+		t.Fatalf("unexpected image part: %#v", parts[1])
+	}
+	if parts[1].ImageURL.Detail != openai.ImageURLDetailHigh {
+		t.Fatalf("unexpected image detail: %q", parts[1].ImageURL.Detail)
+	}
+}
+
+func TestMessagePartsDropsImagesWhenVisionDisabled(t *testing.T) {
+	p := &plugin{}
+	msg := message.Message{
+		message.Text("before"),
+		{Type: "image", Data: map[string]string{"url": "https://example.com/a.jpg"}},
+		message.Text("after"),
+	}
+
+	parts := p.messageParts(msg)
+	if len(parts) != 2 || parts[0].Text != "before" || parts[1].Text != "after" {
+		t.Fatalf("unexpected parts with vision disabled: %#v", parts)
+	}
+}
+
+func TestAgentImageSourceNormalizesOneBotSources(t *testing.T) {
+	httpImage := message.Segment{Type: "image", Data: map[string]string{"url": "https://example.com/a.jpg?a=1&amp;b=2"}}
+	if got := agentImageSource(httpImage); got != "https://example.com/a.jpg?a=1&b=2" {
+		t.Fatalf("unexpected HTTP image source: %q", got)
+	}
+
+	base64Image := message.Segment{Type: "image", Data: map[string]string{"file": "base64://YWJj"}}
+	if got := agentImageSource(base64Image); got != "data:image/jpeg;base64,YWJj" {
+		t.Fatalf("unexpected base64 image source: %q", got)
+	}
+
+	localImage := message.Segment{Type: "image", Data: map[string]string{"file": `C:\temp\a.jpg`}}
+	if got := agentImageSource(localImage); got != "" {
+		t.Fatalf("expected local image path to be rejected, got %q", got)
+	}
+}
+
+func TestChatMessageDisplayTextMarksImages(t *testing.T) {
+	msg := chatMessage{Role: openai.ChatMessageRoleUser, MultiContent: []openai.ChatMessagePart{
+		{Type: openai.ChatMessagePartTypeText, Text: "看看"},
+		{Type: openai.ChatMessagePartTypeImageURL, ImageURL: &openai.ChatMessageImageURL{URL: "https://example.com/a.jpg"}},
+	}}
+	if got := chatMessageDisplayText(msg); got != "看看[图片]" {
+		t.Fatalf("unexpected display text: %q", got)
+	}
+}
 
 func TestSanitizeToolMessagePairsDropsOrphanTool(t *testing.T) {
 	messages := []chatMessage{

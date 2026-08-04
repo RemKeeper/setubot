@@ -49,12 +49,18 @@ type AgentConfig struct {
 	Temperature         float64            `json:"temperature"`
 	Debug               bool               `json:"debug"`
 	DebugLogPath        string             `json:"debugLogPath"`
+	Vision              VisionConfig       `json:"vision"`
 	TaskGuard           TaskGuardConfig    `json:"taskGuard"`
 	ForwardImage        ForwardImageConfig `json:"forwardImage"`
 	Browser             BrowserConfig      `json:"browser"`
 	Exa                 ExaConfig          `json:"exa"`
 	EHTag               EHTagConfig        `json:"ehTag"`
 	EHReq               EHReqConfig        `json:"ehReq"`
+}
+
+type VisionConfig struct {
+	Enabled bool   `json:"enabled"`
+	Detail  string `json:"detail"`
 }
 
 type ForwardImageConfig struct {
@@ -200,6 +206,12 @@ func (cfg AgentConfig) withDefaults() AgentConfig {
 	}
 	if cfg.DebugLogPath == "" {
 		cfg.DebugLogPath = "data/agent_api_body.log"
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Vision.Detail)) {
+	case "low", "high":
+		cfg.Vision.Detail = strings.ToLower(strings.TrimSpace(cfg.Vision.Detail))
+	default:
+		cfg.Vision.Detail = "auto"
 	}
 	if cfg.TaskGuard.MaxSteps <= 0 {
 		cfg.TaskGuard.MaxSteps = cfg.MaxToolRounds
