@@ -104,6 +104,19 @@ func TestAgentImageSourceNormalizesOneBotSources(t *testing.T) {
 	}
 }
 
+func TestVisionImageSourceLabelsDoNotExposeSignedURL(t *testing.T) {
+	labels := visionImageSourceLabels([]string{
+		"https://multimedia.nt.qq.com.cn/download?appid=1406&rkey=secret",
+		"data:image/png;base64,YWJj",
+	})
+	if len(labels) != 2 || labels[0] != "multimedia.nt.qq.com.cn" || labels[1] != "data:image" {
+		t.Fatalf("unexpected source labels: %#v", labels)
+	}
+	if strings.Contains(strings.Join(labels, ","), "secret") {
+		t.Fatal("source labels must not expose signed URL query parameters")
+	}
+}
+
 func TestChatMessageDisplayTextMarksImages(t *testing.T) {
 	msg := chatMessage{Role: openai.ChatMessageRoleUser, MultiContent: []openai.ChatMessagePart{
 		{Type: openai.ChatMessagePartTypeText, Text: "看看"},

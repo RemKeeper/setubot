@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log"
+	"net/url"
 	"strings"
 	"time"
 
@@ -42,6 +44,8 @@ func (p *plugin) callAnalyzeImages(ctx *zero.Ctx, prompt string) (string, error)
 	if len(images) == 0 {
 		return "", fmt.Errorf("当前消息及引用消息中没有可用图片")
 	}
+	log.Printf("[agent/vision] 已从 OneBot 上下文提取 %d 张图片，来源=%s，视觉模型=%s", len(images), strings.Join(visionImageSourceLabels(images), ","), p.cfg.Vision.Model)
+	p.debugLogf("[agent/vision] 当前消息ID=%v 原始消息ID=%s replyID=%s", ctx.Event.MessageID, strings.TrimSpace(string(ctx.Event.RawMessageID)), replyMessageID(ctx.Event.Message))
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		prompt = strings.TrimSpace(ctx.ExtractPlainText())
@@ -93,6 +97,26 @@ func (p *plugin) callAnalyzeImages(ctx *zero.Ctx, prompt string) (string, error)
 	return truncateRunes(result, p.cfg.Vision.MaxResultChars), nil
 }
 
+func visionImageSourceLabels(images []string) []string {
+	labels := make([]string, 0, len(images))
+	for _, image := range images {
+		switch {
+		case strings.HasPrefix(image, "data:image/"):
+			labels = append(labels, "data:image")
+		case strings.HasPrefix(image, "http://") || strings.HasPrefix(image, "https://"):
+			parsed, err := url.Parse(image)
+			if err != nil || parsed.Host == "" {
+				labels = append(labels, "http(s)")
+			} else {
+				labels = append(labels, parsed.Host)
+			}
+		default:
+			labels = append(labels, "unknown")
+		}
+	}
+	return labels
+}
+
 func (p *plugin) requestImageSources(ctx *zero.Ctx) []string {
 	limit := p.cfg.Vision.MaxImages
 	if limit <= 0 {
@@ -100,7 +124,7 @@ func (p *plugin) requestImageSources(ctx *zero.Ctx) []string {
 	}
 	images := make([]string, 0, limit)
 	seen := make(map[string]struct{}, limit)
-	appendImages := func(msg message.Message) {
+	appendImages := func(msg message.Message, origin string) {
 		for _, segment := range msg {
 			if len(images) >= limit || segment.Type != "image" {
 				continue
@@ -114,13 +138,14 @@ func (p *plugin) requestImageSources(ctx *zero.Ctx) []string {
 			}
 			seen[source] = struct{}{}
 			images = append(images, source)
+			p.debugLogf("[agent/vision] 图片[%d] origin=%s source=%s", len(images), origin, source)
 		}
 	}
 
 	if replyID := replyMessageID(ctx.Event.Message); replyID != "" {
 		replied := ctx.GetMessage(replyID, true)
-		appendImages(replied.Elements)
+		appendImages(replied.Elements, "reply:"+replyID)
 	}
-	appendImages(ctx.Event.Message)
+	appendImages(ctx.Event.Message, "current:"+fmt.Sprint(ctx.Event.MessageID))
 	return images
 }
