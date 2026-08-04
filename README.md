@@ -45,7 +45,7 @@ cp config.example.json config.json
 - `agent.apiKey`：OpenAI 兼容接口密钥。
 - `agent.baseURL`：OpenAI 兼容接口地址，例如 `https://api.openai.com` 或本地代理地址。
 - `agent.model`：聊天模型名。
-- `agent.vision.enabled`：是否把 QQ 消息及引用消息中的图片发送给视觉模型。
+- `agent.vision.enabled`：是否启用 QQ 消息及引用消息的图片识别。
 
 4. 启动 OneBot 端
 
@@ -95,8 +95,14 @@ go build -o setubot .
 - `maxToolRounds`：单轮最多工具调用轮数。
 - `maxContextChars`：发送给模型的消息字符预算，默认 `300000`；超出后优先丢弃较早历史，作为 token 上限前的安全闸门。
 - `maxToolResultChars`：单条工具结果字符上限，默认 `60000`；避免大型 HTML、JSON 等进入模型上下文。
-- `vision.enabled`：是否启用图片输入。开启后支持私聊图片、群聊 `@机器人 + 图片`，以及回复图文消息提问；模型本身也必须支持视觉输入。
+- `vision.enabled`：是否启用图片输入。开启后支持私聊图片、群聊 `@机器人 + 图片`，以及回复图文消息提问。
+- `vision.mode`：识图模式。`direct` 会把图片直接发送给 `agent.model`；`tool` 不会把图片发送给主模型，而是提供 `analyze_images` 工具，由独立视觉模型识别后把文字结果返回主模型。主模型不支持视觉时应使用 `tool`。
+- `vision.baseURL`、`vision.apiKey`、`vision.model`：独立视觉工具使用的 OpenAI 兼容接口。留空时分别继承 `agent.baseURL`、`agent.apiKey`、`agent.model`。
+- `vision.systemPrompt`：视觉模型的系统提示词。
 - `vision.detail`：OpenAI 兼容视觉接口的图片细节级别，可选 `auto`、`low`、`high`，无效值按 `auto` 处理。
+- `vision.maxImages`：单次识图最多传入的图片数量，默认 `8`；先取引用消息图片，再取当前消息图片，并自动去重。
+- `vision.maxResultChars`：视觉模型结果返回主对话前的字符上限，默认 `12000`。
+- `vision.temperature`：视觉模型温度，建议使用较低值以减少识别结果臆测。
 - `taskGuard`：长流程任务约束配置；启用后，当用户请求命中关键词时会注入完成度约束提示，并可用 `maxSteps` 提高该轮工具循环上限。
 - `debug`：是否记录请求体到 `debugLogPath`。公开部署建议关闭。
 

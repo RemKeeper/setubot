@@ -458,6 +458,11 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 			"reload_key": stringSchema("可选 nl reload key"),
 		}, []string{"image_hash", "gid", "page_no"}),
 	}
+	if p.visionToolEnabled() {
+		tools = append(tools, functionTool("analyze_images", "使用独立视觉模型分析当前用户消息及其引用消息中携带的图片。主模型看不到图片本身，遇到图片理解、OCR、内容描述、对比或基于图片回答的问题时必须调用本工具。", map[string]interface{}{
+			"prompt": stringSchema("交给视觉模型的具体识图要求，应包含用户原问题以及需要关注的文字、物体、人物、布局、差异等信息"),
+		}, []string{"prompt"}))
+	}
 	if p.cfg.Exa.Enabled {
 		tools = append(tools, functionTool("exa_search", "使用 Exa.ai 搜索互联网，返回标题、URL、发布时间、作者和 highlights 摘要。适合查询实时信息、网页资料和需要来源的问题。", map[string]interface{}{
 			"query":           stringSchema("搜索查询，使用自然语言描述要找的信息"),

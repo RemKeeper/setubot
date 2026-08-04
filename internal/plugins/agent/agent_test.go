@@ -47,6 +47,46 @@ func TestMessagePartsDropsImagesWhenVisionDisabled(t *testing.T) {
 	}
 }
 
+func TestMessagePartsUsesPlaceholderInVisionToolMode(t *testing.T) {
+	p := &plugin{cfg: config.AgentConfig{Vision: config.VisionConfig{Enabled: true, Mode: "tool"}}}
+	msg := message.Message{
+		message.Text("这是什么"),
+		{Type: "image", Data: map[string]string{"url": "https://example.com/a.jpg"}},
+	}
+
+	parts := p.messageParts(msg)
+	if len(parts) != 2 {
+		t.Fatalf("expected text and placeholder, got %#v", parts)
+	}
+	if parts[1].Type != openai.ChatMessagePartTypeText || !strings.Contains(parts[1].Text, "analyze_images") {
+		t.Fatalf("expected image placeholder, got %#v", parts[1])
+	}
+	if multiContentHasImage(parts) {
+		t.Fatal("vision tool mode must not expose image_url to the main model")
+	}
+}
+
+func TestVisionToolDefinitionFollowsMode(t *testing.T) {
+	direct := &plugin{cfg: config.AgentConfig{Vision: config.VisionConfig{Enabled: true, Mode: "direct"}}}
+	if hasToolDefinition(direct.toolDefinitions(), "analyze_images") {
+		t.Fatal("direct vision mode should not expose analyze_images")
+	}
+
+	toolMode := &plugin{cfg: config.AgentConfig{Vision: config.VisionConfig{Enabled: true, Mode: "tool"}}}
+	if !hasToolDefinition(toolMode.toolDefinitions(), "analyze_images") {
+		t.Fatal("tool vision mode should expose analyze_images")
+	}
+}
+
+func hasToolDefinition(tools []openai.Tool, name string) bool {
+	for _, tool := range tools {
+		if tool.Function != nil && tool.Function.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func TestAgentImageSourceNormalizesOneBotSources(t *testing.T) {
 	httpImage := message.Segment{Type: "image", Data: map[string]string{"url": "https://example.com/a.jpg?a=1&amp;b=2"}}
 	if got := agentImageSource(httpImage); got != "https://example.com/a.jpg?a=1&b=2" {

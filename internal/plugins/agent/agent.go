@@ -255,6 +255,9 @@ func (p *plugin) runAgent(ctx *zero.Ctx, prompt string) (string, error) {
 	if len(skills) > 0 {
 		system += "\n可用 skills：" + strings.Join(skills, ", ")
 	}
+	if p.visionToolEnabled() && p.hasRequestImages(ctx) {
+		system += "\n当前用户消息或其引用消息包含图片，但主模型不会直接接收图片。你必须调用 analyze_images 工具，把用户对图片的要求作为 prompt 传入；收到识图结果后再结合对话回答。不要仅凭图片占位符猜测内容。"
+	}
 	system += p.requestIdentityContext(ctx)
 	taskGuardActive := p.taskGuardActive(prompt)
 	maxToolRounds := p.cfg.MaxToolRounds
@@ -328,6 +331,9 @@ func (p *plugin) userChatMessage(ctx *zero.Ctx, prompt string) chatMessage {
 	if strings.TrimSpace(multiContentText(parts)) == "" && !multiContentHasImage(parts) {
 		return chatMessage{Role: openai.ChatMessageRoleUser, Content: prompt}
 	}
+	if p.visionToolEnabled() {
+		return chatMessage{Role: openai.ChatMessageRoleUser, Content: multiContentText(parts)}
+	}
 
 	return chatMessage{Role: openai.ChatMessageRoleUser, MultiContent: parts}
 }
@@ -375,6 +381,10 @@ func (p *plugin) messagePartsRaw(msg message.Message) []openai.ChatMessagePart {
 			}
 			source := agentImageSource(segment)
 			if source != "" {
+				if p.visionToolEnabled() {
+					parts = append(parts, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: "[图片：请调用 analyze_images 工具识别]"})
+					continue
+				}
 				parts = append(parts, openai.ChatMessagePart{
 					Type:     openai.ChatMessagePartTypeImageURL,
 					ImageURL: &openai.ChatMessageImageURL{URL: source, Detail: p.visionDetail()},
@@ -1198,6 +1208,9 @@ func (p *plugin) callTool(ctx *zero.Ctx, name string, rawArgs string) string {
 		return toolResult(content, err)
 	case "browser_task":
 		content, err := p.runBrowserSubagent(stringArg(args, "goal"), stringArg(args, "start_url"))
+		return toolResult(content, err)
+	case "analyze_images":
+		content, err := p.callAnalyzeImages(ctx, stringArg(args, "prompt"))
 		return toolResult(content, err)
 	default:
 		return "未知工具：" + name

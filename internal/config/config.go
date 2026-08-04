@@ -59,8 +59,16 @@ type AgentConfig struct {
 }
 
 type VisionConfig struct {
-	Enabled bool   `json:"enabled"`
-	Detail  string `json:"detail"`
+	Enabled        bool    `json:"enabled"`
+	Mode           string  `json:"mode"`
+	BaseURL        string  `json:"baseURL"`
+	APIKey         string  `json:"apiKey"`
+	Model          string  `json:"model"`
+	SystemPrompt   string  `json:"systemPrompt"`
+	Detail         string  `json:"detail"`
+	MaxImages      int     `json:"maxImages"`
+	MaxResultChars int     `json:"maxResultChars"`
+	Temperature    float64 `json:"temperature"`
 }
 
 type ForwardImageConfig struct {
@@ -207,11 +215,35 @@ func (cfg AgentConfig) withDefaults() AgentConfig {
 	if cfg.DebugLogPath == "" {
 		cfg.DebugLogPath = "data/agent_api_body.log"
 	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Vision.Mode)) {
+	case "tool":
+		cfg.Vision.Mode = "tool"
+	default:
+		cfg.Vision.Mode = "direct"
+	}
+	if cfg.Vision.BaseURL == "" {
+		cfg.Vision.BaseURL = cfg.BaseURL
+	}
+	if cfg.Vision.APIKey == "" {
+		cfg.Vision.APIKey = cfg.APIKey
+	}
+	if cfg.Vision.Model == "" {
+		cfg.Vision.Model = cfg.Model
+	}
+	if cfg.Vision.SystemPrompt == "" {
+		cfg.Vision.SystemPrompt = "你是可靠的视觉分析助手。请严格根据图片和用户提示进行识别与分析，不要臆测图片中不存在的内容；多张图片应分别说明并指出关联。"
+	}
 	switch strings.ToLower(strings.TrimSpace(cfg.Vision.Detail)) {
 	case "low", "high":
 		cfg.Vision.Detail = strings.ToLower(strings.TrimSpace(cfg.Vision.Detail))
 	default:
 		cfg.Vision.Detail = "auto"
+	}
+	if cfg.Vision.MaxImages <= 0 {
+		cfg.Vision.MaxImages = 8
+	}
+	if cfg.Vision.MaxResultChars <= 0 {
+		cfg.Vision.MaxResultChars = 12000
 	}
 	if cfg.TaskGuard.MaxSteps <= 0 {
 		cfg.TaskGuard.MaxSteps = cfg.MaxToolRounds

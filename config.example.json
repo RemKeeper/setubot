@@ -40,7 +40,15 @@
     "debugLogPath": "data/agent_api_body.log",
     "vision": {
       "enabled": true,
-      "detail": "auto"
+      "mode": "tool",
+      "baseURL": "https://api.openai.com",
+      "apiKey": "替换为支持视觉输入的 API Key；留空则复用 agent.apiKey",
+      "model": "gpt-4o-mini",
+      "systemPrompt": "你是可靠的视觉分析助手。请严格根据图片和用户提示进行识别与分析，不要臆测图片中不存在的内容；多张图片应分别说明并指出关联。",
+      "detail": "auto",
+      "maxImages": 8,
+      "maxResultChars": 12000,
+      "temperature": 0.2
     },
     "taskGuard": {
       "enabled": false,
