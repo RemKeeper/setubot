@@ -45,6 +45,7 @@ cp config.example.json config.json
 - `agent.apiKey`：OpenAI 兼容接口密钥。
 - `agent.baseURL`：OpenAI 兼容接口地址，例如 `https://api.openai.com` 或本地代理地址。
 - `agent.model`：聊天模型名。
+- `切换模型`：管理员命令。机器人会通过当前 `agent.baseURL` 的 `/v1/models` 接口获取模型列表，回复编号即可切换；也可以使用 `切换模型 <关键词>` 进行不区分大小写的模糊匹配。唯一匹配会直接切换，多项匹配会进入编号选择，配置会自动保存到 `config.json`。
 - `agent.vision.enabled`：是否启用 QQ 消息及引用消息的图片识别。
 
 4. 启动 OneBot 端

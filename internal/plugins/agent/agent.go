@@ -29,6 +29,7 @@ var (
 	memoryReadPattern   = regexp.MustCompile(`^(?:memory|记忆)\s+(?:read|读取)\s+(.+)$`)
 	memoryListPattern   = regexp.MustCompile(`^(?:memory|记忆)\s+(?:list|列表)$`)
 	resetContextPattern = regexp.MustCompile(`^(?:reset|重置|清空|清除)\s*(?:context|上下文|会话|对话)?$`)
+	modelSwitchPattern  = regexp.MustCompile(`^(?:切换模型|模型切换)(?:\s+(.+))?$`)
 )
 
 type plugin struct {
@@ -42,6 +43,10 @@ type plugin struct {
 	sessions   map[string]*conversationSession
 	sessionM   sync.Mutex
 	browserM   sync.Mutex
+	runtimeM   sync.RWMutex
+	configPath string
+	modelM     sync.Mutex
+	modelPicks map[string]pendingModelSelection
 }
 
 type conversationSession struct {
@@ -52,7 +57,7 @@ type conversationSession struct {
 
 type chatMessage = openai.ChatCompletionMessage
 
-func Register(cfg config.AgentConfig, nickNames []string, superUsers []int64) {
+func Register(cfg config.AgentConfig, nickNames []string, superUsers []int64, configPath string) {
 	aiConfig := openai.DefaultConfig(cfg.APIKey)
 	aiConfig.BaseURL = openAIBaseURL(cfg.BaseURL)
 
@@ -63,6 +68,8 @@ func Register(cfg config.AgentConfig, nickNames []string, superUsers []int64) {
 		aiClient:   openai.NewClientWithConfig(aiConfig),
 		httpClient: &http.Client{Timeout: time.Duration(cfg.Timeout) * time.Second},
 		sessions:   make(map[string]*conversationSession),
+		configPath: configPath,
+		modelPicks: make(map[string]pendingModelSelection),
 	}
 	p.ehTags = newEHTagStore(ehTagRuntimeConfig{
 		Enabled:   cfg.EHTag.Enabled,
@@ -159,10 +166,15 @@ func (p *plugin) dispatch(ctx *zero.Ctx) {
 	if !ok {
 		return
 	}
+	if p.handlePendingModelSelection(ctx, command) {
+		return
+	}
 
 	switch {
 	case p.isHelpText(command):
 		p.help(ctx)
+	case modelSwitchPattern.MatchString(command):
+		p.switchModelCommand(ctx, command)
 	case resetContextPattern.MatchString(command):
 		p.resetContext(ctx)
 	case skillReadPattern.MatchString(command):
@@ -198,7 +210,7 @@ func (p *plugin) isHelpText(command string) bool {
 }
 
 func (p *plugin) help(ctx *zero.Ctx) {
-	ctx.Send("Agent 插件命令：\n1. 群聊：@机器人 <问题>\n2. 私聊：直接发送 <问题>\n3. 重置上下文\n4. skill 读取 <文件名>\n5. memory 写入 <键>: <内容>\n6. memory 读取 <键>\n7. memory 列表\n说明：群聊记忆按群隔离，不同群不会互相污染；agent 会在回答后自动抽取少量长期记忆。\n小红书：来点涩图 / 来N张涩图 / 来点关键词涩图 / 不喜欢\n浏览器工具由 agent 自动调用：goto/click/type/html/screenshot/evaluate/scroll")
+	ctx.Send("Agent 插件命令：\n1. 群聊：@机器人 <问题>\n2. 私聊：直接发送 <问题>\n3. 重置上下文\n4. 切换模型 [模型名关键词]（仅管理员）\n5. skill 读取 <文件名>\n6. memory 写入 <键>: <内容>\n7. memory 读取 <键>\n8. memory 列表\n说明：群聊记忆按群隔离，不同群不会互相污染；agent 会在回答后自动抽取少量长期记忆。\n小红书：来点涩图 / 来N张涩图 / 来点关键词涩图 / 不喜欢\n浏览器工具由 agent 自动调用：goto/click/type/html/screenshot/evaluate/scroll")
 }
 
 func (p *plugin) agentCommand(ctx *zero.Ctx, prompt string) {
@@ -716,7 +728,7 @@ func (p *plugin) summarizeContext(previousSummary string, messages []chatMessage
 	content += "\n\n待压缩对话：\n" + renderMessagesForSummary(messages)
 
 	req := openai.ChatCompletionRequest{
-		Model:       p.cfg.Model,
+		Model:       p.currentModel(),
 		Messages:    []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: content}},
 		Temperature: 0.2,
 	}
@@ -767,7 +779,7 @@ func (p *plugin) extractMemory(ctx *zero.Ctx, userPrompt string, assistantAnswer
 	content += "\n\n助手回答：\n" + truncateRunes(assistantAnswer, 2000)
 
 	req := openai.ChatCompletionRequest{
-		Model:       p.cfg.Model,
+		Model:       p.currentModel(),
 		Messages:    []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: content}},
 		Temperature: 0,
 	}
@@ -996,7 +1008,7 @@ func (p *plugin) chat(messages []chatMessage) (*openai.ChatCompletionResponse, e
 
 func (p *plugin) chatWithTools(kind string, messages []chatMessage, tools []openai.Tool) (*openai.ChatCompletionResponse, error) {
 	req := openai.ChatCompletionRequest{
-		Model:       p.cfg.Model,
+		Model:       p.currentModel(),
 		Messages:    messages,
 		Tools:       tools,
 		ToolChoice:  "auto",

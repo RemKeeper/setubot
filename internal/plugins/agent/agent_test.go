@@ -257,6 +257,23 @@ func TestTaskGuardActive(t *testing.T) {
 	}
 }
 
+func TestMatchModelsSupportsFuzzyMatching(t *testing.T) {
+	models := []string{"gpt-4o-mini", "claude-3-5-sonnet", "qwen-turbo"}
+	if got := matchModels(models, "SONNET"); len(got) != 1 || got[0] != "claude-3-5-sonnet" {
+		t.Fatalf("unexpected case-insensitive match: %#v", got)
+	}
+	if got := matchModels(models, "gpt4m"); len(got) != 1 || got[0] != "gpt-4o-mini" {
+		t.Fatalf("unexpected subsequence match: %#v", got)
+	}
+}
+
+func TestMatchModelsPrefersExactMatch(t *testing.T) {
+	models := []string{"gpt-4", "gpt-4o", "gpt-4o-mini"}
+	if got := matchModels(models, "gpt-4"); len(got) != 1 || got[0] != "gpt-4" {
+		t.Fatalf("expected exact match, got %#v", got)
+	}
+}
+
 func TestEHGalleryCacheParts(t *testing.T) {
 	gid, token := ehGalleryCacheParts("https://exhentai.org/g/4022117/22c0b08fdc/")
 	if gid != "4022117" || token != "22c0b08fdc" {

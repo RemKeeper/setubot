@@ -2,8 +2,10 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	zero "github.com/wdvxdr1123/ZeroBot"
@@ -151,6 +153,74 @@ func LoadFile(path string) (*File, error) {
 	cfg.Agent = cfg.Agent.withDefaults()
 
 	return &cfg, nil
+}
+
+func UpdateAgentModel(path string, model string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil {
+		return err
+	}
+
+	var agent map[string]json.RawMessage
+	if rawAgent, ok := root["agent"]; ok {
+		if err := json.Unmarshal(rawAgent, &agent); err != nil {
+			return fmt.Errorf("解析 agent 配置失败: %w", err)
+		}
+	} else {
+		agent = make(map[string]json.RawMessage)
+	}
+	modelData, err := json.Marshal(strings.TrimSpace(model))
+	if err != nil {
+		return err
+	}
+	agent["model"] = modelData
+	agentData, err := json.Marshal(agent)
+	if err != nil {
+		return err
+	}
+	root["agent"] = agentData
+
+	updated, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return err
+	}
+	updated = append(updated, '\n')
+
+	dir := filepath.Dir(path)
+	temp, err := os.CreateTemp(dir, ".config-*.tmp")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+
+	if _, err := temp.Write(updated); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+
+	if info, err := os.Stat(path); err == nil {
+		if err := os.Chmod(tempPath, info.Mode()); err != nil {
+			return err
+		}
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		return fmt.Errorf("替换配置文件失败: %w", err)
+	}
+
+	return nil
 }
 
 func (cfg DrawConfig) withDefaults() DrawConfig {
