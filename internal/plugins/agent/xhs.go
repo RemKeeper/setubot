@@ -118,7 +118,7 @@ func (p *plugin) runXHSDislike(ctx *zero.Ctx, args map[string]interface{}) (stri
 		return "", err
 	}
 	if ok && last.URL != "" {
-		if _, err := p.browserPost("/api/goto", map[string]interface{}{"url": last.URL}); err != nil {
+		if _, err := p.browserPost("/api/act", map[string]interface{}{"action": "goto", "url": last.URL}); err != nil {
 			return "", fmt.Errorf("导航到最近帖子失败：%w", err)
 		}
 		time.Sleep(3 * time.Second)

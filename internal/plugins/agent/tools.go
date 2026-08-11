@@ -261,6 +261,18 @@ func cleanImageURLs(images []string, limit int) []string {
 	return cleaned
 }
 
+// buildActPayload 构造 /api/act 请求体；空字符串字段会被跳过，以命中 Python 侧默认值。
+func buildActPayload(action string, kv map[string]interface{}) map[string]interface{} {
+	payload := map[string]interface{}{"action": action}
+	for k, v := range kv {
+		if s, ok := v.(string); ok && s == "" {
+			continue
+		}
+		payload[k] = v
+	}
+	return payload
+}
+
 func (p *plugin) callBrowser(name string, args map[string]interface{}) (string, error) {
 	if !p.cfg.Browser.Enabled {
 		return "", fmt.Errorf("浏览器工具未启用")
@@ -268,19 +280,86 @@ func (p *plugin) callBrowser(name string, args map[string]interface{}) (string, 
 
 	switch name {
 	case "browser_goto":
-		return p.browserPost("/api/goto", map[string]interface{}{"url": stringArg(args, "url")})
+		return p.browserPost("/api/act", buildActPayload("goto", map[string]interface{}{
+			"url":        stringArg(args, "url"),
+			"wait_until": firstNonEmptyString(stringArg(args, "wait_until"), "domcontentloaded"),
+			"timeout":    numberArg(args, "timeout", 30000),
+		}))
 	case "browser_click":
-		return p.browserPost("/api/click", map[string]interface{}{"selector": stringArg(args, "selector"), "force": boolArg(args, "force", false)})
+		return p.browserPost("/api/act", buildActPayload("click", map[string]interface{}{
+			"selector": stringArg(args, "selector"),
+			"force":    boolArg(args, "force", false),
+			"timeout":  numberArg(args, "timeout", 10000),
+		}))
+	case "browser_click_text":
+		return p.browserPost("/api/act", buildActPayload("click_text", map[string]interface{}{
+			"text":    stringArg(args, "text"),
+			"timeout": numberArg(args, "timeout", 10000),
+		}))
+	case "browser_fill":
+		return p.browserPost("/api/act", buildActPayload("fill", map[string]interface{}{
+			"selector": stringArg(args, "selector"),
+			"text":     stringArg(args, "text"),
+			"timeout":  numberArg(args, "timeout", 10000),
+		}))
 	case "browser_type":
-		return p.browserPost("/api/type", map[string]interface{}{"selector": stringArg(args, "selector"), "text": stringArg(args, "text"), "delay": numberArg(args, "delay", 100)})
+		return p.browserPost("/api/act", buildActPayload("type", map[string]interface{}{
+			"selector": stringArg(args, "selector"),
+			"text":     stringArg(args, "text"),
+			"delay":    numberArg(args, "delay", 100),
+			"clear":    boolArg(args, "clear", false),
+			"timeout":  numberArg(args, "timeout", 10000),
+		}))
+	case "browser_press":
+		return p.browserPost("/api/act", buildActPayload("press", map[string]interface{}{
+			"key":      stringArg(args, "key"),
+			"selector": stringArg(args, "selector"),
+			"timeout":  numberArg(args, "timeout", 10000),
+		}))
+	case "browser_hover":
+		return p.browserPost("/api/act", buildActPayload("hover", map[string]interface{}{
+			"selector": stringArg(args, "selector"),
+			"timeout":  numberArg(args, "timeout", 10000),
+		}))
+	case "browser_select":
+		return p.browserPost("/api/act", buildActPayload("select", map[string]interface{}{
+			"selector": stringArg(args, "selector"),
+			"value":    stringArg(args, "value"),
+			"timeout":  numberArg(args, "timeout", 10000),
+		}))
+	case "browser_scroll":
+		return p.browserPost("/api/act", buildActPayload("scroll", map[string]interface{}{
+			"direction": stringArg(args, "direction"),
+			"distance":  numberArg(args, "distance", 500),
+		}))
+	case "browser_wait":
+		return p.browserPost("/api/act", buildActPayload("wait", map[string]interface{}{
+			"timeout": numberArg(args, "timeout", 1000),
+		}))
+	case "browser_wait_selector":
+		return p.browserPost("/api/act", buildActPayload("wait_selector", map[string]interface{}{
+			"selector": stringArg(args, "selector"),
+			"state":    stringArg(args, "state"),
+			"timeout":  numberArg(args, "timeout", 10000),
+		}))
+	case "browser_back":
+		return p.browserPost("/api/act", buildActPayload("back", nil))
+	case "browser_forward":
+		return p.browserPost("/api/act", buildActPayload("forward", nil))
+	case "browser_reload":
+		return p.browserPost("/api/act", buildActPayload("reload", nil))
 	case "browser_html":
 		return p.browserGet("/api/html")
 	case "browser_screenshot":
 		return p.browserGet("/api/screenshot")
 	case "browser_evaluate":
 		return p.browserPost("/api/evaluate", map[string]interface{}{"expression": stringArg(args, "expression")})
-	case "browser_scroll":
-		return p.browserPost("/api/scroll", map[string]interface{}{"direction": stringArg(args, "direction"), "distance": numberArg(args, "distance", 500)})
+	case "browser_observe":
+		textLimit := numberArg(args, "text_limit", 3000)
+		elementLimit := numberArg(args, "element_limit", 60)
+		return p.browserGet(fmt.Sprintf("/api/observe?text_limit=%d&element_limit=%d", textLimit, elementLimit))
+	case "browser_markdown":
+		return p.browserGet("/api/markdown")
 	default:
 		return "", fmt.Errorf("未知浏览器工具：%s", name)
 	}
@@ -487,13 +566,69 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 
 func browserToolDefinitions() []openai.Tool {
 	return []openai.Tool{
-		functionTool("browser_goto", "让浏览器访问指定 URL。", map[string]interface{}{"url": stringSchema("要访问的完整 URL")}, []string{"url"}),
-		functionTool("browser_click", "点击页面上的 CSS 选择器。", map[string]interface{}{"selector": stringSchema("CSS 选择器"), "force": boolSchema("是否强制点击")}, []string{"selector"}),
-		functionTool("browser_type", "在页面元素中输入文本。", map[string]interface{}{"selector": stringSchema("CSS 选择器"), "text": stringSchema("输入文本"), "delay": numberSchema("输入延迟毫秒")}, []string{"selector", "text"}),
-		functionTool("browser_html", "获取当前页面 HTML。响应会受字符预算限制；应优先使用 evaluate 提取小型结构化结果。", map[string]interface{}{}, []string{}),
+		functionTool("browser_goto", "让浏览器访问指定 URL。", map[string]interface{}{
+			"url":        stringSchema("要访问的完整 URL"),
+			"wait_until": enumSchema("等待页面加载完成的事件", []string{"load", "domcontentloaded", "networkidle", "commit"}),
+			"timeout":    numberSchema("超时毫秒，默认 30000"),
+		}, []string{"url"}),
+		functionTool("browser_click", "点击页面上的 CSS 选择器对应的元素。", map[string]interface{}{
+			"selector": stringSchema("CSS 选择器"),
+			"force":    boolSchema("是否强制点击（跳过可点击性检查）"),
+			"timeout":  numberSchema("超时毫秒，默认 10000"),
+		}, []string{"selector"}),
+		functionTool("browser_click_text", "点击页面上包含指定文本的第一个元素。", map[string]interface{}{
+			"text":    stringSchema("元素可见文本"),
+			"timeout": numberSchema("超时毫秒，默认 10000"),
+		}, []string{"text"}),
+		functionTool("browser_fill", "用指定文本整体填充输入框（等价于清空后输入，适合表单）。", map[string]interface{}{
+			"selector": stringSchema("CSS 选择器"),
+			"text":     stringSchema("要填入的完整文本"),
+			"timeout":  numberSchema("超时毫秒，默认 10000"),
+		}, []string{"selector", "text"}),
+		functionTool("browser_type", "在输入框中逐个按键输入文本（模拟真人输入）。", map[string]interface{}{
+			"selector": stringSchema("CSS 选择器"),
+			"text":     stringSchema("要输入的文本"),
+			"delay":    numberSchema("每次按键间隔毫秒，默认 100"),
+			"clear":    boolSchema("输入前是否清空已有内容，默认 false"),
+			"timeout":  numberSchema("超时毫秒，默认 10000"),
+		}, []string{"selector", "text"}),
+		functionTool("browser_press", "按下键盘按键（如 Enter、Tab、Escape、Control+a）。可指定 selector 聚焦元素后按键，否则在当前焦点上按键。", map[string]interface{}{
+			"key":      stringSchema("按键名，如 Enter / Tab / Escape / Control+a"),
+			"selector": stringSchema("可选：先聚焦到该元素再按键"),
+			"timeout":  numberSchema("超时毫秒，默认 10000"),
+		}, []string{"key"}),
+		functionTool("browser_hover", "将鼠标悬浮到元素上（用于触发下拉菜单、tooltip 等）。", map[string]interface{}{
+			"selector": stringSchema("CSS 选择器"),
+			"timeout":  numberSchema("超时毫秒，默认 10000"),
+		}, []string{"selector"}),
+		functionTool("browser_select", "在下拉框（select）中选择选项，value 支持 option 的 value 或显示文本。", map[string]interface{}{
+			"selector": stringSchema("CSS 选择器"),
+			"value":    stringSchema("要选择的 option 的 value 或 label"),
+			"timeout":  numberSchema("超时毫秒，默认 10000"),
+		}, []string{"selector", "value"}),
+		functionTool("browser_scroll", "滚动当前页面，支持上/下/左/右四个方向。", map[string]interface{}{
+			"direction": enumSchema("滚动方向", []string{"down", "up", "left", "right"}),
+			"distance":  numberSchema("滚动像素，默认 500"),
+		}, []string{}),
+		functionTool("browser_wait", "等待指定毫秒（用于等待页面渲染或动画完成）。", map[string]interface{}{
+			"timeout": numberSchema("等待毫秒，默认 1000"),
+		}, []string{}),
+		functionTool("browser_wait_selector", "等待页面出现/消失指定元素，常用于等待异步加载完成。", map[string]interface{}{
+			"selector": stringSchema("CSS 选择器"),
+			"state":    enumSchema("等待状态", []string{"visible", "attached", "hidden", "detached"}),
+			"timeout":  numberSchema("超时毫秒，默认 10000"),
+		}, []string{"selector"}),
+		functionTool("browser_back", "浏览器后退一页。", map[string]interface{}{}, []string{}),
+		functionTool("browser_forward", "浏览器前进一页。", map[string]interface{}{}, []string{}),
+		functionTool("browser_reload", "刷新当前页面。", map[string]interface{}{}, []string{}),
+		functionTool("browser_observe", "获取当前页面状态（标题、URL、可见文本、可交互元素列表）。比 html 更省 token，是分析页面时的首选工具。", map[string]interface{}{
+			"text_limit":    numberSchema("可见文本最大字符数，默认 3000"),
+			"element_limit": numberSchema("可交互元素最大数量，默认 60"),
+		}, []string{}),
+		functionTool("browser_markdown", "将当前页面正文提取为 Markdown（适合阅读文章类内容）。", map[string]interface{}{}, []string{}),
+		functionTool("browser_html", "获取当前页面完整 HTML。响应会受字符预算限制；应优先使用 observe 或 evaluate。", map[string]interface{}{}, []string{}),
 		functionTool("browser_screenshot", "触发当前页面截图。base64 正文不会注入上下文，仅返回执行状态。", map[string]interface{}{}, []string{}),
 		functionTool("browser_evaluate", "在当前页面执行 JavaScript 表达式。必须只返回完成任务所需的小型字符串或 JSON，不要返回完整 DOM、base64 或大型数组。", map[string]interface{}{"expression": stringSchema("JavaScript 表达式")}, []string{"expression"}),
-		functionTool("browser_scroll", "滚动当前页面。", map[string]interface{}{"direction": enumSchema("滚动方向", []string{"down", "up"}), "distance": numberSchema("滚动像素")}, []string{}),
 	}
 }
 

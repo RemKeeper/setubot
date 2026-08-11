@@ -40,7 +40,7 @@ def api_evaluate(expression: str):
 
 def api_click(selector: str, force: bool = False):
     try:
-        r = client.post("/api/click", json={"selector": selector, "force": force})
+        r = client.post("/api/act", json={"action": "click", "selector": selector, "force": force})
         r.raise_for_status()
         return r.json()
     except Exception as e:

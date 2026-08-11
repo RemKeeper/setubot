@@ -198,10 +198,11 @@ http://127.0.0.1:58000
 
 需要提供这些端点：
 
-- `POST /api/goto`
-- `POST /api/click`
-- `POST /api/scroll`
+- `POST /api/act`（统一动作接口：goto/click/click_text/fill/type/press/hover/select/scroll/wait/wait_selector/back/forward/reload）
+- `GET /api/observe`（页面状态与可交互元素）
+- `GET /api/markdown`（正文转 Markdown）
 - `GET /api/html`
+- `GET /api/screenshot`
 - `POST /api/evaluate`
 
 启动 bot 前建议先确认浏览器服务可访问，并已登录小红书账号。

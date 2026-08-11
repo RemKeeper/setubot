@@ -91,7 +91,7 @@ client = httpx.Client(base_url=API_BASE, timeout=TIMEOUT)
 # ══════════════════════════════════════════════════════════════════════
 
 def api_goto(url: str):
-    r = client.post("/api/goto", json={"url": url})
+    r = client.post("/api/act", json={"action": "goto", "url": url})
     r.raise_for_status()
     return r.json()
 
@@ -102,8 +102,8 @@ def api_click(selector: str, force: bool = False):
         # Use a short per-click timeout and print response bodies before raising so
         # future 500s include FastAPI's {"detail": ...} text in stderr.
         r = client.post(
-            "/api/click",
-            json={"selector": selector, "force": force},
+            "/api/act",
+            json={"action": "click", "selector": selector, "force": force},
             timeout=CLICK_TIMEOUT,
         )
         if r.status_code >= 400:
@@ -122,7 +122,7 @@ def api_js_click(selector: str):
     """Click an element inside the page with JS events.
 
     XHS' main like/collect controls are visible span elements. Camoufox/Playwright
-    /api/click sometimes times out or returns 500 on these spans even though direct
+    /api/act (click) sometimes times out or returns 500 on these spans even though direct
     DOM MouseEvents work and update the count/icon. This fallback also avoids
     accidentally hitting comment like buttons by requiring the exact selector.
     """
@@ -180,7 +180,7 @@ def api_js_click(selector: str):
 
 
 def click_engage(selector: str):
-    """Click a like/collect control, falling back to JS when /api/click fails."""
+    """Click a like/collect control, falling back to JS when /api/act (click) fails."""
     r = api_click(selector, force=True)
     if r and r.get("status") == "success":
         return {"status": "success", "method": "api", "raw": r}
@@ -241,7 +241,7 @@ def ensure_engage(selector: str, is_active_fn, label: str):
     after = get_engage_state(selector)
     ok = is_active_fn(after)
     if not ok and clicked.get("method") == "api":
-        print(f"  {label} /api/click 后状态未变化，尝试 JS 事件兜底", file=sys.stderr)
+        print(f"  {label} /api/act (click) 后状态未变化，尝试 JS 事件兜底", file=sys.stderr)
         js_clicked = api_js_click(selector)
         if js_clicked and js_clicked.get("status") == "success":
             clicked = {"status": "success", "method": "api+js", "raw": js_clicked}
@@ -269,7 +269,10 @@ def api_evaluate(expression: str):
 
 
 def api_scroll(direction="down", distance=500):
-    r = client.post("/api/scroll", json={"direction": direction, "distance": distance})
+    r = client.post(
+        "/api/act",
+        json={"action": "scroll", "direction": direction, "distance": distance},
+    )
     r.raise_for_status()
     return r.json()
 
@@ -778,14 +781,14 @@ def process_one_post(post: dict, require_positive_tag: bool = False, skip_engage
         if skip_engage:
             print("  ⏭️ 已启用 --skip-engage，跳过点赞和收藏", file=sys.stderr)
         else:
-            # 4. 点赞（避免重复点击已点赞状态；/api/click 失败时回退到 DOM MouseEvents）
+            # 4. 点赞（避免重复点击已点赞状态；/api/act (click) 失败时回退到 DOM MouseEvents）
             result["liked"] = ensure_engage(
                 ".engage-bar-style .like-wrapper",
                 is_liked_state,
                 "点赞",
             )
 
-            # 5. 收藏（避免重复点击已收藏状态；/api/click 失败时回退到 DOM MouseEvents）
+            # 5. 收藏（避免重复点击已收藏状态；/api/act (click) 失败时回退到 DOM MouseEvents）
             result["collected"] = ensure_engage(
                 ".engage-bar-style .collect-wrapper",
                 is_collected_state,

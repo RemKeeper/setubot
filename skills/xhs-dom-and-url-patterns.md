@@ -54,10 +54,9 @@
 
 | 方法 | 端点 | Body | 说明 |
 |------|------|------|------|
-| POST | `/api/goto` | `{"url": "..."}` | 导航 |
-| POST | `/api/click` | `{"selector": "...", "force": false}` | 点击元素 |
-| POST | `/api/type` | `{"selector": "...", "text": "...", "delay": 100}` | 输入文本 |
+| POST | `/api/act` | `{"action": "goto", "url": "..."}` | 统一动作接口：goto/click/click_text/fill/type/press/hover/select/scroll/wait/wait_selector/back/forward/reload |
+| GET | `/api/observe` | — | 页面状态与可交互元素 |
+| GET | `/api/markdown` | — | 正文转 Markdown |
 | GET | `/api/html` | — | 获取页面 HTML |
 | GET | `/api/screenshot` | — | 获取截图 base64 |
 | POST | `/api/evaluate` | `{"expression": "..."}` | 执行 JS |
-| POST | `/api/scroll` | `{"direction": "down", "distance": 500}` | 滚动页面 |

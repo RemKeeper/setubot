@@ -46,11 +46,11 @@ category: social-media
 
 1. **导航到搜索页**:
    ```
-   POST /api/goto
-   {"url": "https://www.xiaohongshu.com/search_result?keyword={URL编码的关键词}&source=web_search_result_notes"}
+   POST /api/act
+   {"action": "goto", "url": "https://www.xiaohongshu.com/search_result?keyword={URL编码的关键词}&source=web_search_result_notes"}
    ```
 
-2. **滚动加载更多**: 用 `/api/scroll` 滚动2-3次获取更多帖子
+2. **滚动加载更多**: 用 `/api/act`（action=scroll）滚动2-3次获取更多帖子
 
 3. **提取帖子列表**:
    ```
@@ -136,8 +136,8 @@ Array.from(new Set(Array.from(document.querySelectorAll("img"))
 
 ```bash
 # 1. 导航到搜索页（keyword 需要 URL 编码）
-curl -s -X POST http://127.0.0.1:58000/api/goto -H "Content-Type: application/json" \
-  -d '{"url": "https://www.xiaohongshu.com/search_result?keyword=碧蓝航线涩图&source=web_search_result_notes"}'
+curl -s -X POST http://127.0.0.1:58000/api/act -H "Content-Type: application/json" \
+  -d '{"action": "goto", "url": "https://www.xiaohongshu.com/search_result?keyword=碧蓝航线涩图&source=web_search_result_notes"}'
 
 # 2. 等待加载后提取帖子链接
 sleep 3
@@ -152,11 +152,11 @@ curl -s -X POST http://127.0.0.1:58000/api/evaluate -H "Content-Type: applicatio
 ```
 
 **逐帖子操作循环**（对每个目标帖子）：
-1. `POST /api/goto` 导航到帖子 URL
+1. `POST /api/act`（action=goto）导航到帖子 URL
 2. `sleep 3` 等待加载
-3. `POST /api/click` 点赞 `.engage-bar-style .like-wrapper`（force=true）
+3. `POST /api/act`（action=click）点赞 `.engage-bar-style .like-wrapper`（force=true）
 4. `sleep 1`
-5. `POST /api/click` 收藏 `.engage-bar-style .collect-wrapper`（force=true）
+5. `POST /api/act`（action=click）收藏 `.engage-bar-style .collect-wrapper`（force=true）
 6. `sleep 1`
 7. `POST /api/evaluate` 提取图片（见图片提取 JS）
 8. 由 `xhs_setu` 工具内部用 zerobot 图片消息/合并转发发送图片
@@ -213,7 +213,7 @@ curl -s -X POST http://127.0.0.1:58000/api/evaluate -H "Content-Type: applicatio
 
 **已验证的失败模式（不要重试）**：
 - `window.location.href = post_url` → 重定向到 `/explore/` 首页
-- `/api/goto` → 同样重定向
+- `/api/act`（action=goto）→ 同样重定向
 - 通过搜索标题找帖子 → 搜索结果不包含该帖子
 - 在用户收藏/点赞页面找帖子 → **刚操作的帖子不会立即同步到个人页面**（有延迟）
 - 通过 XHS 内部 API (`/api/sns/web/v1/note/like`) 直接调用 → 缺少 `x-s`/`x-t` 签名，请求被拒
@@ -224,9 +224,9 @@ curl -s -X POST http://127.0.0.1:58000/api/evaluate -H "Content-Type: applicatio
 
 | 方法 | 端点 | 功能 |
 |------|------|------|
-| POST | `/api/goto` | 导航到 URL |
-| POST | `/api/click` | 点击元素，支持 `force` 参数 |
-| POST | `/api/scroll` | 滚动页面 |
+| POST | `/api/act` | 统一动作：goto/click/click_text/fill/type/press/hover/select/scroll/wait/wait_selector/back/forward/reload |
+| GET | `/api/observe` | 页面状态与可交互元素 |
+| GET | `/api/markdown` | 正文转 Markdown |
 | GET | `/api/html` | 获取页面 HTML |
 | POST | `/api/evaluate` | 在当前页面执行 JS，返回 `{result: ...}` |
 
