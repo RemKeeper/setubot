@@ -33,20 +33,21 @@ var (
 )
 
 type plugin struct {
-	cfg        config.AgentConfig
-	nickNames  []string
-	superUsers []int64
-	aiClient   *openai.Client
-	httpClient *http.Client
-	memory     *MemoryStore
-	ehTags     *ehTagStore
-	sessions   map[string]*conversationSession
-	sessionM   sync.Mutex
-	browserM   sync.Mutex
-	runtimeM   sync.RWMutex
-	configPath string
-	modelM     sync.Mutex
-	modelPicks map[string]pendingModelSelection
+	cfg                        config.AgentConfig
+	nickNames                  []string
+	superUsers                 []int64
+	aiClient                   *openai.Client
+	httpClient                 *http.Client
+	memory                     *MemoryStore
+	ehTags                     *ehTagStore
+	sessions                   map[string]*conversationSession
+	historyBootstrapSuppressed map[string]bool
+	sessionM                   sync.Mutex
+	browserM                   sync.Mutex
+	runtimeM                   sync.RWMutex
+	configPath                 string
+	modelM                     sync.Mutex
+	modelPicks                 map[string]pendingModelSelection
 }
 
 type conversationSession struct {
@@ -62,14 +63,15 @@ func Register(cfg config.AgentConfig, nickNames []string, superUsers []int64, co
 	aiConfig.BaseURL = openAIBaseURL(cfg.BaseURL)
 
 	p := &plugin{
-		cfg:        cfg,
-		nickNames:  normalizeNickNames(nickNames),
-		superUsers: append([]int64(nil), superUsers...),
-		aiClient:   openai.NewClientWithConfig(aiConfig),
-		httpClient: &http.Client{Timeout: time.Duration(cfg.Timeout) * time.Second},
-		sessions:   make(map[string]*conversationSession),
-		configPath: configPath,
-		modelPicks: make(map[string]pendingModelSelection),
+		cfg:                        cfg,
+		nickNames:                  normalizeNickNames(nickNames),
+		superUsers:                 append([]int64(nil), superUsers...),
+		aiClient:                   openai.NewClientWithConfig(aiConfig),
+		httpClient:                 &http.Client{Timeout: time.Duration(cfg.Timeout) * time.Second},
+		sessions:                   make(map[string]*conversationSession),
+		historyBootstrapSuppressed: make(map[string]bool),
+		configPath:                 configPath,
+		modelPicks:                 make(map[string]pendingModelSelection),
 	}
 	p.ehTags = newEHTagStore(ehTagRuntimeConfig{
 		Enabled:   cfg.EHTag.Enabled,
@@ -252,7 +254,7 @@ func (p *plugin) agentCommand(ctx *zero.Ctx, prompt string) {
 }
 
 func (p *plugin) resetContext(ctx *zero.Ctx) {
-	p.clearSession(p.sessionKey(ctx))
+	p.clearSessionAndSuppressHistory(p.sessionKey(ctx))
 	ctx.Send("已重置当前上下文")
 }
 
@@ -281,7 +283,8 @@ func (p *plugin) runAgent(ctx *zero.Ctx, prompt string) (string, error) {
 	}
 
 	turnMessages := []chatMessage{p.userChatMessage(ctx, prompt)}
-	messages := p.buildMessages(system, sessionKey, turnMessages)
+	bootstrap := p.bootstrapHistory(ctx, sessionKey)
+	messages := p.buildMessagesWithBootstrap(system, sessionKey, bootstrap, turnMessages)
 
 	for i := 0; i <= maxToolRounds; i++ {
 		resp, err := p.chat(messages)
@@ -623,12 +626,17 @@ func formatInt64List(values []int64) string {
 }
 
 func (p *plugin) buildMessages(system string, sessionKey string, turnMessages []chatMessage) []chatMessage {
+	return p.buildMessagesWithBootstrap(system, sessionKey, nil, turnMessages)
+}
+
+func (p *plugin) buildMessagesWithBootstrap(system string, sessionKey string, bootstrap []chatMessage, turnMessages []chatMessage) []chatMessage {
 	summary, history := p.sessionHistory(sessionKey)
-	messages := make([]chatMessage, 0, 2+len(history)+len(turnMessages))
+	messages := make([]chatMessage, 0, 2+len(bootstrap)+len(history)+len(turnMessages))
 	messages = append(messages, chatMessage{Role: openai.ChatMessageRoleSystem, Content: system})
 	if strings.TrimSpace(summary) != "" {
 		messages = append(messages, chatMessage{Role: openai.ChatMessageRoleSystem, Content: "以下是较早对话的压缩摘要，请作为长期上下文参考：\n" + summary})
 	}
+	messages = append(messages, normalizeChatMessages(bootstrap)...)
 	messages = append(messages, normalizeChatMessages(history)...)
 	messages = append(messages, normalizeChatMessages(turnMessages)...)
 
@@ -659,6 +667,7 @@ func (p *plugin) appendSession(sessionKey string, messages []chatMessage) {
 		session = &conversationSession{}
 		p.sessions[sessionKey] = session
 	}
+	delete(p.historyBootstrapSuppressed, sessionKey)
 	session.messages = append(session.messages, messages...)
 	session.updatedAt = time.Now()
 	shouldSummarize := shouldSummarizeContext(session.messages, p.cfg.SummaryTriggerTurns)
@@ -827,6 +836,17 @@ func renderMessagesForSummary(messages []chatMessage) string {
 func (p *plugin) clearSession(sessionKey string) {
 	p.sessionM.Lock()
 	delete(p.sessions, sessionKey)
+	delete(p.historyBootstrapSuppressed, sessionKey)
+	p.sessionM.Unlock()
+}
+
+func (p *plugin) clearSessionAndSuppressHistory(sessionKey string) {
+	p.sessionM.Lock()
+	delete(p.sessions, sessionKey)
+	if p.historyBootstrapSuppressed == nil {
+		p.historyBootstrapSuppressed = make(map[string]bool)
+	}
+	p.historyBootstrapSuppressed[sessionKey] = true
 	p.sessionM.Unlock()
 }
 

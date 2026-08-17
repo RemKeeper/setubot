@@ -32,32 +32,40 @@ type DrawConfig struct {
 }
 
 type AgentConfig struct {
-	Enabled             bool               `json:"enabled"`
-	BaseURL             string             `json:"baseURL"`
-	APIKey              string             `json:"apiKey"`
-	Model               string             `json:"model"`
-	SystemPrompt        string             `json:"systemPrompt"`
-	SkillDir            string             `json:"skillDir"`
-	MemoryDir           string             `json:"memoryDir"`
-	Timeout             int                `json:"timeout"`
-	MaxToolRounds       int                `json:"maxToolRounds"`
-	MaxContextTurns     int                `json:"maxContextTurns"`
-	MaxContextChars     int                `json:"maxContextChars"`
-	MaxToolResultChars  int                `json:"maxToolResultChars"`
-	SummaryTriggerTurns int                `json:"summaryTriggerTurns"`
-	SummaryKeepTurns    int                `json:"summaryKeepTurns"`
-	ContextTTL          int                `json:"contextTTL"`
-	MaxResponseChars    int                `json:"maxResponseChars"`
-	Temperature         float64            `json:"temperature"`
-	Debug               bool               `json:"debug"`
-	DebugLogPath        string             `json:"debugLogPath"`
-	Vision              VisionConfig       `json:"vision"`
-	TaskGuard           TaskGuardConfig    `json:"taskGuard"`
-	ForwardImage        ForwardImageConfig `json:"forwardImage"`
-	Browser             BrowserConfig      `json:"browser"`
-	Exa                 ExaConfig          `json:"exa"`
-	EHTag               EHTagConfig        `json:"ehTag"`
-	EHReq               EHReqConfig        `json:"ehReq"`
+	Enabled             bool                   `json:"enabled"`
+	BaseURL             string                 `json:"baseURL"`
+	APIKey              string                 `json:"apiKey"`
+	Model               string                 `json:"model"`
+	SystemPrompt        string                 `json:"systemPrompt"`
+	SkillDir            string                 `json:"skillDir"`
+	MemoryDir           string                 `json:"memoryDir"`
+	Timeout             int                    `json:"timeout"`
+	MaxToolRounds       int                    `json:"maxToolRounds"`
+	MaxContextTurns     int                    `json:"maxContextTurns"`
+	MaxContextChars     int                    `json:"maxContextChars"`
+	MaxToolResultChars  int                    `json:"maxToolResultChars"`
+	SummaryTriggerTurns int                    `json:"summaryTriggerTurns"`
+	SummaryKeepTurns    int                    `json:"summaryKeepTurns"`
+	ContextTTL          int                    `json:"contextTTL"`
+	HistoryBootstrap    HistoryBootstrapConfig `json:"historyBootstrap"`
+	MaxResponseChars    int                    `json:"maxResponseChars"`
+	Temperature         float64                `json:"temperature"`
+	Debug               bool                   `json:"debug"`
+	DebugLogPath        string                 `json:"debugLogPath"`
+	Vision              VisionConfig           `json:"vision"`
+	TaskGuard           TaskGuardConfig        `json:"taskGuard"`
+	ForwardImage        ForwardImageConfig     `json:"forwardImage"`
+	Browser             BrowserConfig          `json:"browser"`
+	Exa                 ExaConfig              `json:"exa"`
+	EHTag               EHTagConfig            `json:"ehTag"`
+	EHReq               EHReqConfig            `json:"ehReq"`
+}
+
+type HistoryBootstrapConfig struct {
+	Enabled  *bool `json:"enabled"`
+	MinCount int   `json:"minCount"`
+	MaxCount int   `json:"maxCount"`
+	MaxChars int   `json:"maxChars"`
 }
 
 type VisionConfig struct {
@@ -279,6 +287,28 @@ func (cfg AgentConfig) withDefaults() AgentConfig {
 	}
 	if cfg.ContextTTL <= 0 {
 		cfg.ContextTTL = 3600
+	}
+	if cfg.HistoryBootstrap.Enabled == nil {
+		enabled := true
+		cfg.HistoryBootstrap.Enabled = &enabled
+	}
+	if cfg.HistoryBootstrap.MinCount < 4 {
+		cfg.HistoryBootstrap.MinCount = 4
+	}
+	if cfg.HistoryBootstrap.MinCount > 7 {
+		cfg.HistoryBootstrap.MinCount = 7
+	}
+	if cfg.HistoryBootstrap.MaxCount < 4 {
+		cfg.HistoryBootstrap.MaxCount = 7
+	}
+	if cfg.HistoryBootstrap.MaxCount > 7 {
+		cfg.HistoryBootstrap.MaxCount = 7
+	}
+	if cfg.HistoryBootstrap.MaxCount < cfg.HistoryBootstrap.MinCount {
+		cfg.HistoryBootstrap.MaxCount = cfg.HistoryBootstrap.MinCount
+	}
+	if cfg.HistoryBootstrap.MaxChars <= 0 {
+		cfg.HistoryBootstrap.MaxChars = 6000
 	}
 	if cfg.MaxResponseChars <= 0 {
 		cfg.MaxResponseChars = 3500

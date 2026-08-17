@@ -221,7 +221,7 @@ func (p *plugin) applyModel(ctx *zero.Ctx, model string) {
 	p.runtimeM.Lock()
 	p.cfg.Model = model
 	p.runtimeM.Unlock()
-	p.clearSession(p.sessionKey(ctx))
+	p.clearSessionAndSuppressHistory(p.sessionKey(ctx))
 	ctx.Send(fmt.Sprintf("已切换模型为 %s，并保存到配置文件；当前会话上下文已重置", model))
 }
 

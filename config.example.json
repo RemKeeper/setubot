@@ -34,6 +34,12 @@
     "summaryTriggerTurns": 8,
     "summaryKeepTurns": 4,
     "contextTTL": 3600,
+    "historyBootstrap": {
+      "enabled": true,
+      "minCount": 4,
+      "maxCount": 7,
+      "maxChars": 6000
+    },
     "maxResponseChars": 3500,
     "temperature": 0.5,
     "debug": false,
