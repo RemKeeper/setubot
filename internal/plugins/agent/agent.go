@@ -869,9 +869,6 @@ func compactMessagesForSession(messages []chatMessage) []chatMessage {
 		if compacted[i].Role == openai.ChatMessageRoleTool {
 			compacted[i].Content = truncateRunes(compacted[i].Content, 4000)
 		}
-		if compacted[i].ReasoningContent != "" {
-			compacted[i].ReasoningContent = ""
-		}
 	}
 	return normalizeChatMessages(compacted)
 }

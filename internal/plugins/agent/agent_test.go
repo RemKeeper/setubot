@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -144,10 +145,75 @@ func TestSanitizeToolMessagePairsDropsOrphanTool(t *testing.T) {
 }
 
 func TestCompactMessagesForSessionTruncatesToolResult(t *testing.T) {
-	messages := []chatMessage{{Role: openai.ChatMessageRoleTool, ToolCallID: "call_1", Content: strings.Repeat("x", 10000)}}
+	messages := []chatMessage{
+		{Role: openai.ChatMessageRoleAssistant, Content: " ", ReasoningContent: "保留这段推理", ToolCalls: []openai.ToolCall{{ID: "call_1"}}},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "call_1", Content: strings.Repeat("x", 10000)},
+	}
 	compacted := compactMessagesForSession(messages)
-	if len([]rune(compacted[0].Content)) > 4003 {
-		t.Fatalf("tool result was not compacted: %d chars", len([]rune(compacted[0].Content)))
+	if len(compacted) != 2 {
+		t.Fatalf("expected complete tool history, got %#v", compacted)
+	}
+	if compacted[0].ReasoningContent != "保留这段推理" {
+		t.Fatalf("reasoning content was not preserved: %q", compacted[0].ReasoningContent)
+	}
+	if len([]rune(compacted[1].Content)) > 4003 {
+		t.Fatalf("tool result was not compacted: %d chars", len([]rune(compacted[1].Content)))
+	}
+}
+
+func TestReasoningContentIsSerializedWithToolCallHistory(t *testing.T) {
+	message := chatMessage{
+		Role:             openai.ChatMessageRoleAssistant,
+		Content:          " ",
+		ReasoningContent: "Kimi K3 的原始推理",
+		ToolCalls: []openai.ToolCall{{
+			ID:   "call_1",
+			Type: openai.ToolTypeFunction,
+			Function: openai.FunctionCall{
+				Name:      "search_memory",
+				Arguments: `{"query":"历史偏好"}`,
+			},
+		}},
+	}
+	compacted := compactMessagesForSession([]chatMessage{message})
+	data, err := json.Marshal(compacted[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(data, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["reasoning_content"] != message.ReasoningContent {
+		t.Fatalf("reasoning_content missing or changed: %s", data)
+	}
+	if _, ok := body["tool_calls"]; !ok {
+		t.Fatalf("tool_calls missing from serialized history: %s", data)
+	}
+}
+
+func TestBuildMessagesRetainsReasoningAcrossSessionTurns(t *testing.T) {
+	p := &plugin{
+		cfg:      config.AgentConfig{MaxContextChars: 10000},
+		sessions: make(map[string]*conversationSession),
+	}
+	key := "private:1"
+	p.appendSession(key, []chatMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "请查一下"},
+		{Role: openai.ChatMessageRoleAssistant, Content: " ", ReasoningContent: "必须保留", ToolCalls: []openai.ToolCall{{ID: "call_1"}}},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "call_1", Content: "工具结果"},
+		{Role: openai.ChatMessageRoleAssistant, Content: "已完成"},
+	})
+
+	messages := p.buildMessages("system", key, []chatMessage{{Role: openai.ChatMessageRoleUser, Content: "继续"}})
+	if len(messages) != 6 {
+		t.Fatalf("unexpected rebuilt message count: %#v", messages)
+	}
+	if messages[2].ReasoningContent != "必须保留" {
+		t.Fatalf("reasoning content was lost while rebuilding history: %#v", messages[2])
+	}
+	if messages[3].ToolCallID != "call_1" {
+		t.Fatalf("tool result was not paired in rebuilt history: %#v", messages[3])
 	}
 }
 
