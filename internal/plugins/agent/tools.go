@@ -572,7 +572,8 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 			"include":            arrayIntSchema("file_prio：仅下载的文件索引列表"),
 			"delete_files":       boolSchema("delete：是否同时删除本地文件，默认 false"),
 			"ratio_limit":        numberSchema("share_limit：分享率限制（-1 不限，-2 用全局，正数为倍率），默认 -1"),
-			"seeding_time_limit": numberSchema("share_limit：做种时间限制（分钟，-1 不限，-2 用全局）"),
+			"seeding_time_limit":          numberSchema("share_limit：做种时间限制（分钟，-1 不限，-2 用全局）"),
+			"inactive_seeding_time_limit": numberSchema("share_limit：非活跃做种时间限制（分钟，-1 不限，-2 用全局；qBittorrent 4.6+ 必填）"),
 			"filter":             enumSchema("list：按状态过滤", []string{"all", "downloading", "seeding", "completed", "paused", "active", "inactive", "stalled", "errored"}),
 			"limit":              numberSchema("list/files：最多返回条数，list 默认 50，files 默认 200"),
 		}, []string{"action"}))

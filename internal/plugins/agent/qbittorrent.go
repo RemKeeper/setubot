@@ -122,11 +122,12 @@ func (c *qbClient) do(ctx context.Context, method, path string, form url.Values,
 	return data, nil
 }
 
-func (c *qbClient) setShareLimits(ctx context.Context, hashes []string, ratioLimit, seedingTimeLimit float64) error {
+func (c *qbClient) setShareLimits(ctx context.Context, hashes []string, ratioLimit, seedingTimeLimit, inactiveSeedingTimeLimit float64) error {
 	form := url.Values{}
 	form.Set("hashes", strings.Join(hashes, "|"))
 	form.Set("ratioLimit", formatFloat(ratioLimit))
 	form.Set("seedingTimeLimit", formatFloat(seedingTimeLimit))
+	form.Set("inactiveSeedingTimeLimit", formatFloat(inactiveSeedingTimeLimit))
 	_, err := c.do(ctx, http.MethodPost, "/api/v2/torrents/setShareLimits", form, nil)
 	return err
 }
@@ -371,13 +372,15 @@ func (p *plugin) qbAdd(ctx context.Context, client *qbClient, args map[string]in
 		isPT := p.qbIsPT(ctx, client, t)
 		ratio := p.cfg.QBittorrent.DefaultShareRatio
 		seedLimit := -2.0 // 做种时间用全局默认
+		inactiveSeedLimit := -2.0 // 非活跃做种时间用全局默认
 		label := fmt.Sprintf("默认·分享率 %s", formatRatioLimit(ratio))
 		if isPT {
 			ratio = -1 // 不限分享率
 			seedLimit = -1
+			inactiveSeedLimit = -1
 			label = "PT 白名单·不限上传"
 		}
-		if err := client.setShareLimits(ctx, []string{t.Hash}, ratio, seedLimit); err != nil {
+		if err := client.setShareLimits(ctx, []string{t.Hash}, ratio, seedLimit, inactiveSeedLimit); err != nil {
 			fmt.Fprintf(&b, "- %s\n  分享率设置失败：%v\n", t.Name, err)
 			continue
 		}
@@ -626,11 +629,12 @@ func (p *plugin) qbShareLimit(ctx context.Context, client *qbClient, args map[st
 	}
 	ratio := floatArg(args, "ratio_limit", -1)            // -1 不限
 	seedLimit := floatArg(args, "seeding_time_limit", -2) // -2 用全局
-	if err := client.setShareLimits(ctx, hashes, ratio, seedLimit); err != nil {
+	inactiveSeedLimit := floatArg(args, "inactive_seeding_time_limit", -2) // -2 用全局
+	if err := client.setShareLimits(ctx, hashes, ratio, seedLimit, inactiveSeedLimit); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("已设置 %d 个任务分享率限制=%s、做种时间限制=%s：%s",
-		len(hashes), formatRatioLimit(ratio), formatFloat(seedLimit), strings.Join(hashes, ", ")), nil
+	return fmt.Sprintf("已设置 %d 个任务分享率限制=%s、做种时间限制=%s、非活跃做种时间限制=%s：%s",
+		len(hashes), formatRatioLimit(ratio), formatFloat(seedLimit), formatFloat(inactiveSeedLimit), strings.Join(hashes, ", ")), nil
 }
 
 func (p *plugin) qbReannounce(ctx context.Context, client *qbClient, args map[string]interface{}) (string, error) {
