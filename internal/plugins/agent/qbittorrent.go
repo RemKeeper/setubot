@@ -182,6 +182,66 @@ func (c *qbClient) setCategory(ctx context.Context, hashes []string, category st
 	return err
 }
 
+func (c *qbClient) listTrackers(ctx context.Context, hash string) ([]qbTracker, error) {
+	data, err := c.do(ctx, http.MethodGet, "/api/v2/torrents/trackers", nil, url.Values{"hash": []string{hash}})
+	if err != nil {
+		return nil, err
+	}
+	var trackers []qbTracker
+	if err := json.Unmarshal(data, &trackers); err != nil {
+		return nil, fmt.Errorf("解析 tracker 列表失败: %w", err)
+	}
+	return trackers, nil
+}
+
+func (c *qbClient) addTrackers(ctx context.Context, hash string, trackers []string) error {
+	form := url.Values{}
+	form.Set("hash", hash)
+	form.Set("urls", strings.Join(trackers, "\n"))
+	_, err := c.do(ctx, http.MethodPost, "/api/v2/torrents/addTrackers", form, nil)
+	return err
+}
+
+func (c *qbClient) editTracker(ctx context.Context, hash, originalURL, newURL string) error {
+	form := url.Values{}
+	form.Set("hash", hash)
+	form.Set("origUrl", originalURL)
+	form.Set("newUrl", newURL)
+	_, err := c.do(ctx, http.MethodPost, "/api/v2/torrents/editTracker", form, nil)
+	return err
+}
+
+func (c *qbClient) removeTrackers(ctx context.Context, hash string, trackers []string) error {
+	form := url.Values{}
+	form.Set("hash", hash)
+	form.Set("urls", strings.Join(trackers, "|"))
+	_, err := c.do(ctx, http.MethodPost, "/api/v2/torrents/removeTrackers", form, nil)
+	return err
+}
+
+func (c *qbClient) getPreferences(ctx context.Context) (map[string]interface{}, error) {
+	data, err := c.do(ctx, http.MethodGet, "/api/v2/app/preferences", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	var preferences map[string]interface{}
+	if err := json.Unmarshal(data, &preferences); err != nil {
+		return nil, fmt.Errorf("解析 qBittorrent 全局设置失败: %w", err)
+	}
+	return preferences, nil
+}
+
+func (c *qbClient) setPreferences(ctx context.Context, preferences map[string]interface{}) error {
+	data, err := json.Marshal(preferences)
+	if err != nil {
+		return err
+	}
+	form := url.Values{}
+	form.Set("json", string(data))
+	_, err = c.do(ctx, http.MethodPost, "/api/v2/app/setPreferences", form, nil)
+	return err
+}
+
 // qbTorrent 对应 /api/v2/torrents/info 的元素。
 type qbTorrent struct {
 	Hash          string  `json:"hash"`
@@ -282,6 +342,16 @@ func (p *plugin) callQBittorrent(zc *zero.Ctx, args map[string]interface{}) (str
 		return p.qbShareLimit(ctx, client, args)
 	case "reannounce":
 		return p.qbReannounce(ctx, client, args)
+	case "trackers":
+		return p.qbTrackers(ctx, client, args)
+	case "add_tracker":
+		return p.qbAddTracker(ctx, client, args)
+	case "edit_tracker":
+		return p.qbEditTracker(ctx, client, args)
+	case "remove_tracker":
+		return p.qbRemoveTracker(ctx, client, args)
+	case "global_trackers":
+		return p.qbGlobalTrackers(ctx, client, args)
 	case "files":
 		return p.qbFiles(ctx, client, args)
 	case "file_prio":
@@ -291,7 +361,7 @@ func (p *plugin) callQBittorrent(zc *zero.Ctx, args map[string]interface{}) (str
 	case "set_category":
 		return p.qbSetCategory(ctx, client, args)
 	default:
-		return "", fmt.Errorf("未知 qbittorrent 动作：%s（支持 add/list/status/pause/resume/delete/share_limit/reannounce/files/file_prio/move/set_category）", action)
+		return "", fmt.Errorf("未知 qbittorrent 动作：%s（支持 add/list/status/pause/resume/delete/share_limit/reannounce/trackers/add_tracker/edit_tracker/remove_tracker/global_trackers/files/file_prio/move/set_category）", action)
 	}
 }
 
@@ -649,6 +719,124 @@ func (p *plugin) qbReannounce(ctx context.Context, client *qbClient, args map[st
 		return "", err
 	}
 	return fmt.Sprintf("已重新宣告 %d 个任务：%s", len(hashes), strings.Join(hashes, ", ")), nil
+}
+
+func (p *plugin) qbTrackers(ctx context.Context, client *qbClient, args map[string]interface{}) (string, error) {
+	hash := strings.TrimSpace(stringArg(args, "hash"))
+	if hash == "" {
+		return "", fmt.Errorf("trackers 需要提供 hash")
+	}
+	if err := client.login(ctx); err != nil {
+		return "", err
+	}
+	trackers, err := client.listTrackers(ctx, hash)
+	if err != nil {
+		return "", err
+	}
+	if len(trackers) == 0 {
+		return fmt.Sprintf("任务 %s 没有 tracker", shortHash(hash)), nil
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "任务 %s 的 tracker（%d 个）：\n", shortHash(hash), len(trackers))
+	for _, tracker := range trackers {
+		fmt.Fprintf(&b, "- tier=%d status=%d seeds=%d peers=%d %s",
+			tracker.Tier, tracker.Status, tracker.NumSeeds, tracker.NumPeers, tracker.URL)
+		if strings.TrimSpace(tracker.Msg) != "" {
+			fmt.Fprintf(&b, "：%s", strings.TrimSpace(tracker.Msg))
+		}
+		b.WriteString("\n")
+	}
+	return b.String(), nil
+}
+
+func (p *plugin) qbAddTracker(ctx context.Context, client *qbClient, args map[string]interface{}) (string, error) {
+	hash := strings.TrimSpace(stringArg(args, "hash"))
+	trackers := cleanTrackerURLs(stringSliceArg(args, "trackers"))
+	if hash == "" || len(trackers) == 0 {
+		return "", fmt.Errorf("add_tracker 需要提供 hash 和 trackers")
+	}
+	if err := client.login(ctx); err != nil {
+		return "", err
+	}
+	if err := client.addTrackers(ctx, hash, trackers); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("已为任务 %s 添加 %d 个 tracker：%s", shortHash(hash), len(trackers), strings.Join(trackers, ", ")), nil
+}
+
+func (p *plugin) qbEditTracker(ctx context.Context, client *qbClient, args map[string]interface{}) (string, error) {
+	hash := strings.TrimSpace(stringArg(args, "hash"))
+	originalURL := strings.TrimSpace(stringArg(args, "original_url"))
+	newURL := strings.TrimSpace(stringArg(args, "new_url"))
+	if hash == "" || originalURL == "" || newURL == "" {
+		return "", fmt.Errorf("edit_tracker 需要提供 hash、original_url 和 new_url")
+	}
+	if err := client.login(ctx); err != nil {
+		return "", err
+	}
+	if err := client.editTracker(ctx, hash, originalURL, newURL); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("已将任务 %s 的 tracker 替换为：%s", shortHash(hash), newURL), nil
+}
+
+func (p *plugin) qbRemoveTracker(ctx context.Context, client *qbClient, args map[string]interface{}) (string, error) {
+	hash := strings.TrimSpace(stringArg(args, "hash"))
+	trackers := cleanTrackerURLs(stringSliceArg(args, "trackers"))
+	if hash == "" || len(trackers) == 0 {
+		return "", fmt.Errorf("remove_tracker 需要提供 hash 和 trackers")
+	}
+	if err := client.login(ctx); err != nil {
+		return "", err
+	}
+	if err := client.removeTrackers(ctx, hash, trackers); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("已从任务 %s 删除 %d 个 tracker：%s", shortHash(hash), len(trackers), strings.Join(trackers, ", ")), nil
+}
+
+func (p *plugin) qbGlobalTrackers(ctx context.Context, client *qbClient, args map[string]interface{}) (string, error) {
+	if err := client.login(ctx); err != nil {
+		return "", err
+	}
+	preferences, err := client.getPreferences(ctx)
+	if err != nil {
+		return "", err
+	}
+	if !boolArg(args, "set", false) {
+		return fmt.Sprintf("全局默认 tracker：enabled=%v\n%s", preferences["add_trackers_enabled"], formatTrackerText(preferences["add_trackers"])), nil
+	}
+	trackers := cleanTrackerURLs(stringSliceArg(args, "trackers"))
+	enabled := boolArg(args, "enabled", len(trackers) > 0)
+	if err := client.setPreferences(ctx, map[string]interface{}{
+		"add_trackers_enabled": enabled,
+		"add_trackers":         strings.Join(trackers, "\n"),
+	}); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("已设置全局默认 tracker：enabled=%v，数量=%d；仅对之后添加的任务自动生效，已有任务请使用 add_tracker。", enabled, len(trackers)), nil
+}
+
+func cleanTrackerURLs(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
+}
+
+func formatTrackerText(value interface{}) string {
+	text := strings.TrimSpace(fmt.Sprint(value))
+	if text == "" {
+		return "（未配置）"
+	}
+	return text
 }
 
 func (p *plugin) qbHashesArg(args map[string]interface{}) []string {

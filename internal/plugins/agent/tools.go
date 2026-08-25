@@ -556,11 +556,16 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 
 	if p.cfg.QBittorrent.Enabled {
 		tools = append(tools, functionTool("qbittorrent", "远程控制 qBittorrent 下载器：添加磁力链接/种子下载，并管理任务。添加任务时自动判定：任务名或 tracker 命中配置 agent.qbittorrent.ptKeywords 白名单关键词的 PT 资源不限上传（分享率 -1、做种不限）；非 PT 公开种子需要你自己决定文件取舍——建议 paused=true 添加后用 files 查看文件列表，根据文件名与大小用 file_prio 剔除广告/推广文件（如 *.url、广告*.txt、*推广*.exe、www.* 等）仅保留需要内容，再 resume。保存位置默认在配置 defaultSavePath 下，可根据种子信息与内容用 subdirectory 指定子目录，或用 move 事后调整。配置 agent.qbittorrent.ownerOnly=true 时仅主人可用，权限由工具强制校验，调用失败时不要臆测原因。", map[string]interface{}{
-			"action":                      enumSchema("要执行的操作", []string{"add", "list", "status", "pause", "resume", "delete", "share_limit", "reannounce", "files", "file_prio", "move", "set_category"}),
+			"action":                      enumSchema("要执行的操作", []string{"add", "list", "status", "pause", "resume", "delete", "share_limit", "reannounce", "trackers", "add_tracker", "edit_tracker", "remove_tracker", "global_trackers", "files", "file_prio", "move", "set_category"}),
 			"urls":                        arrayStringSchema("add：磁力链接或种子 URL 列表，至少 1 个"),
 			"url":                         stringSchema("add：单个磁力链接或种子 URL（与 urls 二选一）"),
-			"hash":                        stringSchema("status/files/file_prio：任务 hash"),
+			"hash":                        stringSchema("status/trackers/add_tracker/edit_tracker/remove_tracker/files/file_prio：任务 hash"),
 			"hashes":                      arrayStringSchema("pause/resume/delete/share_limit/reannounce/move/set_category：任务 hash 列表"),
+			"trackers":                    arrayStringSchema("add_tracker/remove_tracker/global_trackers：tracker URL 列表；单任务添加支持多条，全局设置用换行保存"),
+			"original_url":                stringSchema("edit_tracker：要替换的原 tracker URL"),
+			"new_url":                     stringSchema("edit_tracker：新的 tracker URL"),
+			"set":                         boolSchema("global_trackers：是否写入全局默认 tracker；false 仅查看"),
+			"enabled":                     boolSchema("global_trackers：是否启用新任务自动添加全局 tracker"),
 			"save_path":                   stringSchema("add/move：完整保存路径；不传则用 subdirectory 或默认目录"),
 			"subdirectory":                stringSchema("add/move：默认下载目录下的子目录，根据种子内容/信息决定"),
 			"category":                    stringSchema("add/move/set_category：任务分类"),
