@@ -371,7 +371,7 @@ func (p *plugin) qbAdd(ctx context.Context, client *qbClient, args map[string]in
 	for _, t := range added {
 		isPT := p.qbIsPT(ctx, client, t)
 		ratio := p.cfg.QBittorrent.DefaultShareRatio
-		seedLimit := -2.0 // 做种时间用全局默认
+		seedLimit := -2.0         // 做种时间用全局默认
 		inactiveSeedLimit := -2.0 // 非活跃做种时间用全局默认
 		label := fmt.Sprintf("默认·分享率 %s", formatRatioLimit(ratio))
 		if isPT {
@@ -627,8 +627,8 @@ func (p *plugin) qbShareLimit(ctx context.Context, client *qbClient, args map[st
 	if err := client.login(ctx); err != nil {
 		return "", err
 	}
-	ratio := floatArg(args, "ratio_limit", -1)            // -1 不限
-	seedLimit := floatArg(args, "seeding_time_limit", -2) // -2 用全局
+	ratio := floatArg(args, "ratio_limit", -1)                             // -1 不限
+	seedLimit := floatArg(args, "seeding_time_limit", -2)                  // -2 用全局
 	inactiveSeedLimit := floatArg(args, "inactive_seeding_time_limit", -2) // -2 用全局
 	if err := client.setShareLimits(ctx, hashes, ratio, seedLimit, inactiveSeedLimit); err != nil {
 		return "", err
