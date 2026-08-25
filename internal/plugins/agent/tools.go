@@ -555,22 +555,26 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 	}
 
 	if p.cfg.QBittorrent.Enabled {
-		tools = append(tools, functionTool("qbittorrent", "远程控制 qBittorrent 下载器：添加磁力链接/种子下载，并管理任务（列表/状态/暂停/恢复/删除/重新做种/设置分享率）。添加任务时自动判定：任务名或 tracker 命中配置 agent.qbittorrent.ptKeywords 白名单关键词的 PT 资源不限上传（分享率 -1、做种不限）；其余资源按配置 agent.qbittorrent.defaultShareRatio 限制分享率。配置 agent.qbittorrent.ownerOnly=true 时仅主人可用，权限由工具强制校验，调用失败时不要臆测原因。", map[string]interface{}{
-			"action":             enumSchema("要执行的操作", []string{"add", "list", "status", "pause", "resume", "delete", "share_limit", "reannounce"}),
+		tools = append(tools, functionTool("qbittorrent", "远程控制 qBittorrent 下载器：添加磁力链接/种子下载，并管理任务。添加任务时自动判定：任务名或 tracker 命中配置 agent.qbittorrent.ptKeywords 白名单关键词的 PT 资源不限上传（分享率 -1、做种不限）；非 PT 公开种子需要你自己决定文件取舍——建议 paused=true 添加后用 files 查看文件列表，根据文件名与大小用 file_prio 剔除广告/推广文件（如 *.url、广告*.txt、*推广*.exe、www.* 等）仅保留需要内容，再 resume。保存位置默认在配置 defaultSavePath 下，可根据种子信息与内容用 subdirectory 指定子目录，或用 move 事后调整。配置 agent.qbittorrent.ownerOnly=true 时仅主人可用，权限由工具强制校验，调用失败时不要臆测原因。", map[string]interface{}{
+			"action":             enumSchema("要执行的操作", []string{"add", "list", "status", "pause", "resume", "delete", "share_limit", "reannounce", "files", "file_prio", "move", "set_category"}),
 			"urls":               arrayStringSchema("add：磁力链接或种子 URL 列表，至少 1 个"),
 			"url":                stringSchema("add：单个磁力链接或种子 URL（与 urls 二选一）"),
-			"hash":               stringSchema("status：要查看详情的任务 hash"),
-			"hashes":             arrayStringSchema("pause/resume/delete/share_limit/reannounce：任务 hash 列表"),
-			"save_path":          stringSchema("add：可选下载目录，默认使用配置的 defaultSavePath"),
-			"category":           stringSchema("add：可选任务分类"),
+			"hash":               stringSchema("status/files/file_prio：任务 hash"),
+			"hashes":             arrayStringSchema("pause/resume/delete/share_limit/reannounce/move/set_category：任务 hash 列表"),
+			"save_path":          stringSchema("add/move：完整保存路径；不传则用 subdirectory 或默认目录"),
+			"subdirectory":       stringSchema("add/move：默认下载目录下的子目录，根据种子内容/信息决定"),
+			"category":           stringSchema("add/move/set_category：任务分类"),
 			"tags":               arrayStringSchema("add：可选任务标签"),
-			"paused":             boolSchema("add：是否以暂停状态添加，默认 false"),
+			"paused":             boolSchema("add：是否以暂停状态添加。非 PT 资源建议 true，先筛选文件再开始下载"),
+			"list_files":         boolSchema("add：添加后是否直接返回文件列表，便于立即决定文件取舍"),
 			"rename":             stringSchema("add：可选重命名任务"),
+			"exclude":            arrayIntSchema("file_prio：不下载的文件索引列表"),
+			"include":            arrayIntSchema("file_prio：仅下载的文件索引列表"),
 			"delete_files":       boolSchema("delete：是否同时删除本地文件，默认 false"),
 			"ratio_limit":        numberSchema("share_limit：分享率限制（-1 不限，-2 用全局，正数为倍率），默认 -1"),
 			"seeding_time_limit": numberSchema("share_limit：做种时间限制（分钟，-1 不限，-2 用全局）"),
 			"filter":             enumSchema("list：按状态过滤", []string{"all", "downloading", "seeding", "completed", "paused", "active", "inactive", "stalled", "errored"}),
-			"limit":              numberSchema("list：最多返回任务数，默认 50"),
+			"limit":              numberSchema("list/files：最多返回条数，list 默认 50，files 默认 200"),
 		}, []string{"action"}))
 	}
 
@@ -694,6 +698,10 @@ func boolSchema(description string) map[string]interface{} {
 
 func arrayStringSchema(description string) map[string]interface{} {
 	return map[string]interface{}{"type": "array", "description": description, "items": map[string]interface{}{"type": "string"}}
+}
+
+func arrayIntSchema(description string) map[string]interface{} {
+	return map[string]interface{}{"type": "array", "description": description, "items": map[string]interface{}{"type": "integer"}}
 }
 
 func arrayObjectSchema(description string, properties map[string]interface{}, required []string) map[string]interface{} {

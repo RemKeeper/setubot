@@ -137,6 +137,50 @@ func (c *qbClient) hashesForm(hashes []string) url.Values {
 	return form
 }
 
+func (c *qbClient) listFiles(ctx context.Context, hash string) ([]qbFile, error) {
+	data, err := c.do(ctx, http.MethodGet, "/api/v2/torrents/files", nil, url.Values{"hash": []string{hash}})
+	if err != nil {
+		return nil, err
+	}
+	var files []qbFile
+	if err := json.Unmarshal(data, &files); err != nil {
+		return nil, fmt.Errorf("解析文件列表失败: %w", err)
+	}
+	return files, nil
+}
+
+func (c *qbClient) setFilePriorities(ctx context.Context, hash string, ids []int, priority int) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	form := url.Values{}
+	form.Set("hash", hash)
+	idStrs := make([]string, 0, len(ids))
+	for _, id := range ids {
+		idStrs = append(idStrs, strconv.Itoa(id))
+	}
+	form.Set("id", strings.Join(idStrs, ","))
+	form.Set("priority", strconv.Itoa(priority))
+	_, err := c.do(ctx, http.MethodPost, "/api/v2/torrents/filePrio", form, nil)
+	return err
+}
+
+func (c *qbClient) setLocation(ctx context.Context, hashes []string, location string) error {
+	form := url.Values{}
+	form.Set("hashes", strings.Join(hashes, "|"))
+	form.Set("location", location)
+	_, err := c.do(ctx, http.MethodPost, "/api/v2/torrents/setLocation", form, nil)
+	return err
+}
+
+func (c *qbClient) setCategory(ctx context.Context, hashes []string, category string) error {
+	form := url.Values{}
+	form.Set("hashes", strings.Join(hashes, "|"))
+	form.Set("category", category)
+	_, err := c.do(ctx, http.MethodPost, "/api/v2/torrents/setCategory", form, nil)
+	return err
+}
+
 // qbTorrent 对应 /api/v2/torrents/info 的元素。
 type qbTorrent struct {
 	Hash          string  `json:"hash"`
@@ -183,6 +227,17 @@ type qbTorrentProperties struct {
 	Comment      string  `json:"comment"`
 }
 
+// qbFile 对应 /api/v2/torrents/files 的元素。
+type qbFile struct {
+	Index        int     `json:"index"`
+	Name         string  `json:"name"`
+	Size         int64   `json:"size"`
+	Progress     float64 `json:"progress"`
+	Priority     int     `json:"priority"`
+	Availability float64 `json:"availability"`
+	IsSeed       bool    `json:"is_seed"`
+}
+
 // callQBittorrent 统一 qBittorrent 工具入口。
 // 鉴权在工具层完成：配置 ownerOnly=true 时仅主人（superUsers）可调用，不依赖模型判断。
 func (p *plugin) callQBittorrent(zc *zero.Ctx, args map[string]interface{}) (string, error) {
@@ -226,8 +281,16 @@ func (p *plugin) callQBittorrent(zc *zero.Ctx, args map[string]interface{}) (str
 		return p.qbShareLimit(ctx, client, args)
 	case "reannounce":
 		return p.qbReannounce(ctx, client, args)
+	case "files":
+		return p.qbFiles(ctx, client, args)
+	case "file_prio":
+		return p.qbFilePrio(ctx, client, args)
+	case "move":
+		return p.qbMove(ctx, client, args)
+	case "set_category":
+		return p.qbSetCategory(ctx, client, args)
 	default:
-		return "", fmt.Errorf("未知 qbittorrent 动作：%s（支持 add/list/status/pause/resume/delete/share_limit/reannounce）", action)
+		return "", fmt.Errorf("未知 qbittorrent 动作：%s（支持 add/list/status/pause/resume/delete/share_limit/reannounce/files/file_prio/move/set_category）", action)
 	}
 }
 
@@ -268,10 +331,8 @@ func (p *plugin) qbAdd(ctx context.Context, client *qbClient, args map[string]in
 
 	form := url.Values{}
 	form.Set("urls", strings.Join(clean, "\n"))
-	if savePath := stringArg(args, "save_path"); savePath != "" {
+	if savePath := p.qbResolveSavePath(args); savePath != "" {
 		form.Set("savepath", savePath)
-	} else if p.cfg.QBittorrent.DefaultSavePath != "" {
-		form.Set("savepath", p.cfg.QBittorrent.DefaultSavePath)
 	}
 	if category := stringArg(args, "category"); category != "" {
 		form.Set("category", category)
@@ -320,9 +381,44 @@ func (p *plugin) qbAdd(ctx context.Context, client *qbClient, args map[string]in
 			fmt.Fprintf(&b, "- %s\n  分享率设置失败：%v\n", t.Name, err)
 			continue
 		}
-		fmt.Fprintf(&b, "- %s\n  hash=%s 判定=%s\n", t.Name, shortHash(t.Hash), label)
+		fmt.Fprintf(&b, "- %s\n  hash=%s 判定=%s\n", t.Name, t.Hash, label)
+		if !isPT {
+			fmt.Fprintf(&b, "  提示：非 PT 公开种子，建议用 files 查看文件列表，用 file_prio 剔除广告/推广文件（如 *.url、广告*.txt、*推广*.exe 等）后，再 resume 开始下载。\n")
+		}
+		if boolArg(args, "list_files", false) {
+			p.qbAppendFileList(ctx, client, t.Hash, &b)
+		}
 	}
 	return b.String(), nil
+}
+
+// qbResolveSavePath 解析保存路径：优先 save_path（完整路径），其次 subdirectory（默认目录下的子目录），最后默认目录。
+func (p *plugin) qbResolveSavePath(args map[string]interface{}) string {
+	if savePath := strings.TrimSpace(stringArg(args, "save_path")); savePath != "" {
+		return savePath
+	}
+	base := strings.TrimSpace(p.cfg.QBittorrent.DefaultSavePath)
+	if sub := strings.TrimSpace(stringArg(args, "subdirectory")); sub != "" {
+		return joinPath(base, sub)
+	}
+	return base
+}
+
+// qbAppendFileList 把任务文件列表追加到输出，供 Agent 决定文件取舍。
+func (p *plugin) qbAppendFileList(ctx context.Context, client *qbClient, hash string, b *strings.Builder) {
+	files, err := client.listFiles(ctx, hash)
+	if err != nil || len(files) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "  文件列表（%d 个）：\n", len(files))
+	maxShow := 40
+	if len(files) > maxShow {
+		fmt.Fprintf(b, "  （仅显示前 %d 个，可用 files 查看完整列表）\n", maxShow)
+		files = files[:maxShow]
+	}
+	for _, f := range files {
+		fmt.Fprintf(b, "    [%d] %s（%s）\n", f.Index, f.Name, formatBytes(f.Size))
+	}
 }
 
 // qbIsPT 根据任务名与 tracker URL 是否命中配置白名单关键词，判定是否为 PT 资源。
@@ -559,6 +655,178 @@ func (p *plugin) qbHashesArg(args map[string]interface{}) []string {
 		}
 	}
 	return hashes
+}
+
+// qbFiles 列出任务文件，供 Agent 根据文件名/大小决定取舍。
+func (p *plugin) qbFiles(ctx context.Context, client *qbClient, args map[string]interface{}) (string, error) {
+	hash := strings.TrimSpace(stringArg(args, "hash"))
+	if hash == "" {
+		return "", fmt.Errorf("files 需要提供 hash")
+	}
+	if err := client.login(ctx); err != nil {
+		return "", err
+	}
+	files, err := client.listFiles(ctx, hash)
+	if err != nil {
+		return "", err
+	}
+	if len(files) == 0 {
+		return fmt.Sprintf("任务 %s 暂无文件信息（种子元数据可能尚未就绪，可稍后重试）", shortHash(hash)), nil
+	}
+	limit := numberArg(args, "limit", 200)
+	var b strings.Builder
+	fmt.Fprintf(&b, "任务 %s 文件列表（%d 个）：\n", shortHash(hash), len(files))
+	shown := 0
+	for _, f := range files {
+		if limit > 0 && shown >= limit {
+			fmt.Fprintf(&b, "（已省略剩余 %d 个文件）\n", len(files)-shown)
+			break
+		}
+		fmt.Fprintf(&b, "  [%d] %s（%s）优先级=%d\n", f.Index, f.Name, formatBytes(f.Size), f.Priority)
+		shown++
+	}
+	return b.String(), nil
+}
+
+// qbFilePrio 设置文件下载优先级：exclude 表示不下载的文件索引，include 表示仅下载的文件索引。
+func (p *plugin) qbFilePrio(ctx context.Context, client *qbClient, args map[string]interface{}) (string, error) {
+	hash := strings.TrimSpace(stringArg(args, "hash"))
+	if hash == "" {
+		return "", fmt.Errorf("file_prio 需要提供 hash")
+	}
+	exclude := intSliceArg(args, "exclude")
+	include := intSliceArg(args, "include")
+	if len(exclude) == 0 && len(include) == 0 {
+		return "", fmt.Errorf("file_prio 需要提供 exclude（不下载的文件索引）或 include（仅下载的文件索引）")
+	}
+	if err := client.login(ctx); err != nil {
+		return "", err
+	}
+	files, err := client.listFiles(ctx, hash)
+	if err != nil {
+		return "", err
+	}
+	exists := make(map[int]bool, len(files))
+	all := make([]int, 0, len(files))
+	for _, f := range files {
+		exists[f.Index] = true
+		all = append(all, f.Index)
+	}
+	valid := func(ids []int) []int {
+		out := make([]int, 0, len(ids))
+		for _, id := range ids {
+			if exists[id] {
+				out = append(out, id)
+			}
+		}
+		return out
+	}
+
+	if len(exclude) > 0 {
+		exclude = valid(exclude)
+		if len(exclude) == 0 {
+			return "", fmt.Errorf("exclude 中的文件索引不存在")
+		}
+		if err := client.setFilePriorities(ctx, hash, exclude, 0); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("已设置任务 %s 的 %d 个文件不下载：%v", shortHash(hash), len(exclude), exclude), nil
+	}
+
+	include = valid(include)
+	if len(include) == 0 {
+		return "", fmt.Errorf("include 中的文件索引不存在")
+	}
+	// 先全部置为不下载，再仅保留 include 中的文件。
+	if err := client.setFilePriorities(ctx, hash, all, 0); err != nil {
+		return "", err
+	}
+	if err := client.setFilePriorities(ctx, hash, include, 1); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("已设置任务 %s 仅下载 %d 个文件：%v（其余 %d 个不下载）",
+		shortHash(hash), len(include), include, len(all)-len(include)), nil
+}
+
+// qbMove 移动任务到指定子目录（可同时设置分类）。
+func (p *plugin) qbMove(ctx context.Context, client *qbClient, args map[string]interface{}) (string, error) {
+	hashes := p.qbHashesArg(args)
+	if len(hashes) == 0 {
+		return "", fmt.Errorf("hashes 必填（至少一个）")
+	}
+	savePath := p.qbResolveSavePath(args)
+	if savePath == "" {
+		return "", fmt.Errorf("move 需要提供 save_path 或 subdirectory（或在配置中设置 defaultSavePath）")
+	}
+	if err := client.login(ctx); err != nil {
+		return "", err
+	}
+	if err := client.setLocation(ctx, hashes, savePath); err != nil {
+		return "", err
+	}
+	if category := stringArg(args, "category"); category != "" {
+		if err := client.setCategory(ctx, hashes, category); err != nil {
+			return "", fmt.Errorf("移动成功但设置分类失败：%w", err)
+		}
+	}
+	return fmt.Sprintf("已将 %d 个任务移动到 %s", len(hashes), savePath), nil
+}
+
+// qbSetCategory 设置任务分类。
+func (p *plugin) qbSetCategory(ctx context.Context, client *qbClient, args map[string]interface{}) (string, error) {
+	hashes := p.qbHashesArg(args)
+	if len(hashes) == 0 {
+		return "", fmt.Errorf("hashes 必填（至少一个）")
+	}
+	category := stringArg(args, "category")
+	if category == "" {
+		return "", fmt.Errorf("set_category 需要提供 category")
+	}
+	if err := client.login(ctx); err != nil {
+		return "", err
+	}
+	if err := client.setCategory(ctx, hashes, category); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("已将 %d 个任务设置为分类 %s", len(hashes), category), nil
+}
+
+// intSliceArg 解析 JSON 数字/字符串数组为 int 切片。
+func intSliceArg(args map[string]interface{}, key string) []int {
+	if args == nil || args[key] == nil {
+		return nil
+	}
+	values, ok := args[key].([]interface{})
+	if !ok {
+		return nil
+	}
+	result := make([]int, 0, len(values))
+	for _, value := range values {
+		switch v := value.(type) {
+		case float64:
+			result = append(result, int(v))
+		case int:
+			result = append(result, v)
+		case string:
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+				result = append(result, n)
+			}
+		}
+	}
+	return result
+}
+
+// joinPath 用正斜杠拼接路径，避免 Windows/Linux 分隔符差异（qBittorrent 侧统一为斜杠）。
+func joinPath(base, sub string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/\\")
+	sub = strings.Trim(strings.TrimSpace(sub), "/\\")
+	if base == "" {
+		return sub
+	}
+	if sub == "" {
+		return base
+	}
+	return base + "/" + sub
 }
 
 func floatArg(args map[string]interface{}, key string, fallback float64) float64 {
