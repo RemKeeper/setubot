@@ -59,6 +59,7 @@ type AgentConfig struct {
 	Exa                 ExaConfig              `json:"exa"`
 	EHTag               EHTagConfig            `json:"ehTag"`
 	EHReq               EHReqConfig            `json:"ehReq"`
+	QBittorrent         QBittorrentConfig      `json:"qbittorrent"`
 }
 
 type HistoryBootstrapConfig struct {
@@ -126,6 +127,37 @@ type EHReqConfig struct {
 	UserAgent          string `json:"userAgent"`
 	MaxBodyChars       int    `json:"maxBodyChars"`
 	ImageCacheMaxBytes int64  `json:"imageCacheMaxBytes"`
+}
+
+type QBittorrentConfig struct {
+	Enabled           bool     `json:"enabled"`
+	Host              string   `json:"host"`
+	Port              int      `json:"port"`
+	HTTPS             bool     `json:"https"`
+	OwnerOnly         bool     `json:"ownerOnly"`
+	Username          string   `json:"username"`
+	Password          string   `json:"password"`
+	DefaultSavePath   string   `json:"defaultSavePath"`
+	DefaultShareRatio float64  `json:"defaultShareRatio"`
+	PTKeywords        []string `json:"ptKeywords"`
+	Timeout           int      `json:"timeout"`
+}
+
+// BaseURL 返回 qBittorrent WebUI 地址，例如 http://127.0.0.1:8080。
+func (cfg QBittorrentConfig) BaseURL() string {
+	scheme := "http"
+	if cfg.HTTPS {
+		scheme = "https"
+	}
+	host := strings.TrimSpace(cfg.Host)
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	port := cfg.Port
+	if port <= 0 {
+		port = 8080
+	}
+	return fmt.Sprintf("%s://%s:%d", scheme, host, port)
 }
 
 type DriverConfig struct {
@@ -405,6 +437,18 @@ func (cfg AgentConfig) withDefaults() AgentConfig {
 	}
 	if cfg.EHReq.ImageCacheMaxBytes <= 0 {
 		cfg.EHReq.ImageCacheMaxBytes = 2 << 30
+	}
+	if cfg.QBittorrent.Host == "" {
+		cfg.QBittorrent.Host = "127.0.0.1"
+	}
+	if cfg.QBittorrent.Port <= 0 {
+		cfg.QBittorrent.Port = 8080
+	}
+	if cfg.QBittorrent.DefaultShareRatio <= 0 {
+		cfg.QBittorrent.DefaultShareRatio = 1.0
+	}
+	if cfg.QBittorrent.Timeout <= 0 {
+		cfg.QBittorrent.Timeout = 15
 	}
 
 	return cfg

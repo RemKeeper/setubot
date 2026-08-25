@@ -554,6 +554,26 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 		}, []string{"query"}))
 	}
 
+	if p.cfg.QBittorrent.Enabled {
+		tools = append(tools, functionTool("qbittorrent", "远程控制 qBittorrent 下载器：添加磁力链接/种子下载，并管理任务（列表/状态/暂停/恢复/删除/重新做种/设置分享率）。添加任务时自动判定：任务名或 tracker 命中配置 agent.qbittorrent.ptKeywords 白名单关键词的 PT 资源不限上传（分享率 -1、做种不限）；其余资源按配置 agent.qbittorrent.defaultShareRatio 限制分享率。配置 agent.qbittorrent.ownerOnly=true 时仅主人可用，权限由工具强制校验，调用失败时不要臆测原因。", map[string]interface{}{
+			"action":             enumSchema("要执行的操作", []string{"add", "list", "status", "pause", "resume", "delete", "share_limit", "reannounce"}),
+			"urls":               arrayStringSchema("add：磁力链接或种子 URL 列表，至少 1 个"),
+			"url":                stringSchema("add：单个磁力链接或种子 URL（与 urls 二选一）"),
+			"hash":               stringSchema("status：要查看详情的任务 hash"),
+			"hashes":             arrayStringSchema("pause/resume/delete/share_limit/reannounce：任务 hash 列表"),
+			"save_path":          stringSchema("add：可选下载目录，默认使用配置的 defaultSavePath"),
+			"category":           stringSchema("add：可选任务分类"),
+			"tags":               arrayStringSchema("add：可选任务标签"),
+			"paused":             boolSchema("add：是否以暂停状态添加，默认 false"),
+			"rename":             stringSchema("add：可选重命名任务"),
+			"delete_files":       boolSchema("delete：是否同时删除本地文件，默认 false"),
+			"ratio_limit":        numberSchema("share_limit：分享率限制（-1 不限，-2 用全局，正数为倍率），默认 -1"),
+			"seeding_time_limit": numberSchema("share_limit：做种时间限制（分钟，-1 不限，-2 用全局）"),
+			"filter":             enumSchema("list：按状态过滤", []string{"all", "downloading", "seeding", "completed", "paused", "active", "inactive", "stalled", "errored"}),
+			"limit":              numberSchema("list：最多返回任务数，默认 50"),
+		}, []string{"action"}))
+	}
+
 	if !p.cfg.Browser.Enabled {
 		return tools
 	}

@@ -96,6 +96,19 @@
       "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
       "maxBodyChars": 200000,
       "imageCacheMaxBytes": 2147483648
+    },
+    "qbittorrent": {
+      "enabled": false,
+      "host": "127.0.0.1",
+      "port": 8080,
+      "https": false,
+      "ownerOnly": false,
+      "username": "",
+      "password": "",
+      "defaultSavePath": "/downloads",
+      "defaultShareRatio": 1.0,
+      "ptKeywords": [],
+      "timeout": 15
     }
   }
 }

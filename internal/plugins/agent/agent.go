@@ -1235,6 +1235,9 @@ func (p *plugin) callTool(ctx *zero.Ctx, name string, rawArgs string) string {
 	case "exa_search":
 		content, err := p.callExaSearch(args)
 		return toolResult(content, err)
+	case "qbittorrent":
+		content, err := p.callQBittorrent(ctx, args)
+		return toolResult(content, err)
 	case "browser_task":
 		content, err := p.runBrowserSubagent(stringArg(args, "goal"), stringArg(args, "start_url"))
 		return toolResult(content, err)
