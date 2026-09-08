@@ -84,36 +84,36 @@ def check_liked() -> bool:
     """检查当前帖子是否已点赞"""
     result = api_evaluate("""
         (() => {
-            const likeBtn = document.querySelector('.engage-bar-style .like-wrapper');
+            const likeBtn = document.querySelector('#noteContainer .engage-bar-style .like-wrapper');
             if (!likeBtn) return false;
-            // 已点赞时通常有 active/liked class 或特定颜色
-            return likeBtn.classList.contains('active') ||
-                   likeBtn.classList.contains('liked') ||
-                   likeBtn.querySelector('.like-active, [class*="active"]') !== null ||
-                   likeBtn.querySelector('svg.active, [color="red"]') !== null;
+            const href = likeBtn.querySelector('use')?.getAttribute('href') ||
+                         likeBtn.querySelector('use')?.getAttribute('xlink:href') || '';
+            return likeBtn.classList.contains('like-active') || href.includes('#liked');
         })()
     """)
-    # 即使检测不确定，也尝试取消
-    return True
+    return bool(result and result.get("result"))
 
 
 def check_collected() -> bool:
     """检查当前帖子是否已收藏"""
     result = api_evaluate("""
         (() => {
-            const btn = document.querySelector('.engage-bar-style .collect-wrapper');
+            const btn = document.querySelector('#noteContainer .engage-bar-style .collect-wrapper');
             if (!btn) return false;
-            return btn.classList.contains('active') ||
-                   btn.classList.contains('collected') ||
-                   btn.querySelector('.collect-active, [class*="active"]') !== null;
+            const href = btn.querySelector('use')?.getAttribute('href') ||
+                         btn.querySelector('use')?.getAttribute('xlink:href') || '';
+            return btn.classList.contains('collect-active') || href.includes('#collected');
         })()
     """)
-    return True
+    return bool(result and result.get("result"))
 
 
 def unlike():
-    """取消点赞（再点一次即取消）"""
-    r = api_click(".engage-bar-style .like-wrapper", force=True)
+    """仅在当前详情帖已点赞时取消点赞。"""
+    if not check_liked():
+        print("  ℹ️ 当前帖子未点赞，跳过", file=sys.stderr)
+        return True
+    r = api_click("#noteContainer .engage-bar-style .like-wrapper", force=True)
     if r and r.get("status") == "success":
         print("  👎 取消点赞", file=sys.stderr)
         return True
@@ -122,8 +122,11 @@ def unlike():
 
 
 def uncollect():
-    """取消收藏（再点一次即取消）"""
-    r = api_click(".engage-bar-style .collect-wrapper", force=True)
+    """仅在当前详情帖已收藏时取消收藏。"""
+    if not check_collected():
+        print("  ℹ️ 当前帖子未收藏，跳过", file=sys.stderr)
+        return True
+    r = api_click("#noteContainer .engage-bar-style .collect-wrapper", force=True)
     if r and r.get("status") == "success":
         print("  💔 取消收藏", file=sys.stderr)
         return True

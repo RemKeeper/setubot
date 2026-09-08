@@ -216,7 +216,10 @@ def get_engage_state(selector: str):
 
 
 def is_liked_state(state: dict) -> bool:
-    return "#liked" in (state.get("useHref") or "")
+    return (
+        "#liked" in (state.get("useHref") or "")
+        or "like-active" in (state.get("className") or "")
+    )
 
 
 def is_collected_state(state: dict) -> bool:
@@ -577,30 +580,26 @@ def search_mode(args) -> list[dict]:
 # ══════════════════════════════════════════════════════════════════════
 
 def extract_detail_images_js() -> list[str]:
-    """用 JS evaluate 从当前页面 DOM 中提取帖子图片URL（多回退策略）"""
-    # 首选：note-slider-img 和 swiper-slide 中的 img
+    """仅从当前详情容器的正文轮播中提取图片 URL。"""
     js_code = """
     (() => {
-        const urls = new Set();
-        document.querySelectorAll(".note-slider-img img, .swiper-slide img").forEach(img => {
+        const root = document.querySelector("#noteContainer");
+        if (!root) return [];
+
+        const selector = ".media-container .swiper-slide:not(.swiper-slide-duplicate) .note-slider-img img, " +
+                         ".media-container .swiper-slide:not(.swiper-slide-duplicate) img";
+        const urls = [];
+        root.querySelectorAll(selector).forEach(img => {
             let src = img.currentSrc || img.src || img.getAttribute("src") || img.getAttribute("data-src");
             if (!src) return;
             if (!src.includes("xhscdn.com")) return;
-            if (src.includes("sns-avatar")) return;
             if (src.startsWith("data:")) return;
+            if (src.includes("avatar") || src.includes("comment") || src.includes("platform")) return;
+            if (img.closest(".swiper-slide-duplicate, .author-container, .comments-el, .comment-picture")) return;
             src = src.replace(/&amp;/g, "&");
-            urls.add(src);
+            if (!urls.includes(src)) urls.push(src);
         });
-        if (urls.size > 0) return Array.from(urls);
-        // 兜底：宽泛选择器
-        Array.from(document.querySelectorAll("img")).forEach(img => {
-            const src = img.src || img.getAttribute("data-src") || "";
-            if (!src) return;
-            if (src.includes("xhscdn") && !src.includes("avatar") && !src.includes("platform") && !src.includes("comment")) {
-                urls.add(src.replace(/&amp;/g, "&"));
-            }
-        });
-        return Array.from(urls);
+        return urls;
     })()
     """
     result = api_evaluate(js_code)
@@ -783,14 +782,14 @@ def process_one_post(post: dict, require_positive_tag: bool = False, skip_engage
         else:
             # 4. 点赞（避免重复点击已点赞状态；/api/act (click) 失败时回退到 DOM MouseEvents）
             result["liked"] = ensure_engage(
-                ".engage-bar-style .like-wrapper",
+                "#noteContainer .engage-bar-style .like-wrapper",
                 is_liked_state,
                 "点赞",
             )
 
             # 5. 收藏（避免重复点击已收藏状态；/api/act (click) 失败时回退到 DOM MouseEvents）
             result["collected"] = ensure_engage(
-                ".engage-bar-style .collect-wrapper",
+                "#noteContainer .engage-bar-style .collect-wrapper",
                 is_collected_state,
                 "收藏",
             )

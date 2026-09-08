@@ -12,6 +12,22 @@
 | 点赞数 | `section.note-item .like-wrapper .count` | |
 | 视频标记 | `section.note-item video` | 存在则为视频帖，应跳过 |
 
+## 详情页 DOM
+
+所有详情查询必须限定在 `#noteContainer`，避免抓到底层 Feed。正文图片的唯一目标作用域是：
+
+```css
+#noteContainer .media-container .swiper-slide:not(.swiper-slide-duplicate) .note-slider-img img
+```
+
+兼容图片节点层级变化时，只可在同一媒体和非克隆 Slide 作用域内回退到：
+
+```css
+#noteContainer .media-container .swiper-slide:not(.swiper-slide-duplicate) img
+```
+
+禁止全页遍历 `img`。这会混入 Feed 封面、作者/评论头像、评论配图及 Emoji。`.swiper-slide-duplicate` 是 Swiper 循环克隆节点，必须排除。
+
 ## 图片 URL 模式
 
 小红书 CDN 域名: `sns-webpic-qc.xhscdn.com`
@@ -31,24 +47,14 @@
 
 | 目标 | 选择器 | 说明 |
 |------|--------|------|
-| 点赞按钮 | `.engage-bar-style .like-wrapper` | force=true 穿透遮挡 |
-| 收藏按钮 | `.engage-bar-style .collect-wrapper` | force=true 穿透遮挡 |
+| 点赞按钮 | `#noteContainer .engage-bar-style .like-wrapper` | 激活 class 为 `like-active`；force=true 穿透遮挡 |
+| 收藏按钮 | `#noteContainer .engage-bar-style .collect-wrapper` | 激活 class 为 `collect-active`；force=true 穿透遮挡 |
 
 ## JS 表达式最佳实践
 
 `POST /api/evaluate` 的 `expression` 字段注意事项：
 
-```javascript
-// ✅ 好 — 简单表达式
-"Array.from(document.querySelectorAll('img')).map(i => i.src)"
-
-// ❌ 坏 — 嵌套引号和 includes 导致 is not defined 错误
-"Array.from(document.querySelectorAll('img')).map(i => i.src).filter(s => s.includes('avatar'))"
-// 上面这个在某些情况下会报错，原因是 Camoufox evaluate 的字符串解析问题
-
-// ✅ 好 — 用双引号包裹，includes 用双引号
-"Array.from(new Set(Array.from(document.querySelectorAll(\"img\")).map(i => i.src).filter(s => s.includes(\"xhscdn\") && !s.includes(\"avatar\") && !s.includes(\"platform\"))))"
-```
+复杂表达式应作为合法 JSON 字符串传给 `/api/evaluate`。选择器必须限定详情正文范围，不能通过全页 URL 过滤代替 DOM 作用域过滤。Python 中建议使用三引号保存 JavaScript，再由 HTTP 客户端的 `json={"expression": expression}` 负责转义。
 
 ## Camoufox API 端点速查
 

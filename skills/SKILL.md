@@ -61,7 +61,7 @@ category: social-media
 4. **逐个打开帖子** → 点赞 → 收藏 → 提取图片（同方案A步骤4-8）
 
 **搜索页链接格式**: `search_result/帖子ID?xsec_token=...&xsec_source=`
-**帖子详情页**: 将URL中的 `/search_result/` 改为 `/explore/` 即可打开独立详情页
+**帖子详情页**: 从链接提取帖子 ID 和 `xsec_token`，构造 `/discovery/item/{帖子ID}?xsec_token=...&xsec_source=pc_search` 独立详情页。
 
 ### 🔄 方案C（回退）：Browser Tool 手动操作
 
@@ -71,9 +71,9 @@ category: social-media
 2. **筛选**: 用 `elements` action 获取帖子列表，筛选符合用户偏好的帖子
 3. **提取链接**: 获取帖子的完整链接（含 xsec_token），将 `/explore/xxx` 改为 `/discovery/item/xxx`
 4. **打开**: goto 到独立详情页（避免弹窗模式）
-5. **点赞**: 点击 `.engage-bar-style .like-wrapper`
-6. **收藏**: 点击 `.engage-bar-style .collect-wrapper`
-7. **提取图片**: 用 `content` action 提取帖子中的图片URL
+5. **点赞**: 点击 `#noteContainer .engage-bar-style .like-wrapper`
+6. **收藏**: 点击 `#noteContainer .engage-bar-style .collect-wrapper`
+7. **提取图片**: 用 `/api/evaluate` 严格查询 `#noteContainer .media-container` 内的非克隆轮播图片
 8. **发送图片**: 当前 agent 没有通用发图工具，优先回退为告知用户 `xhs_setu` 工具失败原因。
 
 **重要**: 默认只操作 **1个** 帖子。仅当用户明确指定数量时才操作多个。
@@ -87,9 +87,10 @@ category: social-media
 | 帖子标题 | `.title` (在 note-item 内) | 帖子标题文本 |
 | 点赞数 | `.like-wrapper .count` (在 note-item 内) | 帖子点赞数 |
 | 视频检测 | `video` (在 note-item 内) | 判断是否为视频帖 |
-| 点赞按钮 | `.engage-bar-style .like-wrapper` | 帖子详情页点赞，非评论区按钮 |
-| 收藏按钮 | `.engage-bar-style .collect-wrapper` | 帖子详情页收藏 |
-| 图片 | `notes_pre_post` 路径的 `<img>` 标签 | 用 `content` action 提取 markdown 中的图片链接 |
+| 详情容器 | `#noteContainer` | 所有详情页查询的根作用域 |
+| 点赞按钮 | `#noteContainer .engage-bar-style .like-wrapper` | 激活时包含 `.like-active` |
+| 收藏按钮 | `#noteContainer .engage-bar-style .collect-wrapper` | 激活时包含 `.collect-active` |
+| 正文图片 | `#noteContainer .media-container .swiper-slide:not(.swiper-slide-duplicate) .note-slider-img img` | 仅正文轮播，排除首尾克隆图 |
 | 标签/hashtag | `/search_result?keyword=...` 链接 | 帖子中的话题标签 |
 
 ## 图片URL模式参考
@@ -118,16 +119,21 @@ Array.from(document.querySelectorAll("section.note-item")).map((s,i) => ({
 
 **帖子详情页图片**:
 ```javascript
-Array.from(new Set(Array.from(document.querySelectorAll("img"))
-  .map(i => i.src)
-  .filter(s => s.includes("notes_pre_post") || s.includes("spectrum"))))
-```
-
-**帖子详情页图片（更宽泛）**:
-```javascript
-Array.from(new Set(Array.from(document.querySelectorAll("img"))
-  .map(i => i.src)
-  .filter(s => s.includes("xhscdn") && !s.includes("avatar") && !s.includes("platform") && !s.includes("comment"))))
+(() => {
+  const root = document.querySelector("#noteContainer");
+  if (!root) return [];
+  const selector = ".media-container .swiper-slide:not(.swiper-slide-duplicate) .note-slider-img img, " +
+                   ".media-container .swiper-slide:not(.swiper-slide-duplicate) img";
+  const urls = [];
+  root.querySelectorAll(selector).forEach(img => {
+    let src = img.currentSrc || img.src || img.getAttribute("src") || img.getAttribute("data-src");
+    if (!src || !src.includes("xhscdn.com")) return;
+    if (src.includes("avatar") || src.includes("comment") || src.includes("platform")) return;
+    src = src.replace(/&amp;/g, "&");
+    if (!urls.includes(src)) urls.push(src);
+  });
+  return urls;
+})()
 ```
 
 ## 🏷️ 关键词搜索脚本能力
@@ -154,16 +160,16 @@ curl -s -X POST http://127.0.0.1:58000/api/evaluate -H "Content-Type: applicatio
 **逐帖子操作循环**（对每个目标帖子）：
 1. `POST /api/act`（action=goto）导航到帖子 URL
 2. `sleep 3` 等待加载
-3. `POST /api/act`（action=click）点赞 `.engage-bar-style .like-wrapper`（force=true）
+3. `POST /api/act`（action=click）点赞 `#noteContainer .engage-bar-style .like-wrapper`（force=true）
 4. `sleep 1`
-5. `POST /api/act`（action=click）收藏 `.engage-bar-style .collect-wrapper`（force=true）
+5. `POST /api/act`（action=click）收藏 `#noteContainer .engage-bar-style .collect-wrapper`（force=true）
 6. `sleep 1`
 7. `POST /api/evaluate` 提取图片（见图片提取 JS）
 8. 由 `xhs_setu` 工具内部用 zerobot 图片消息/合并转发发送图片
 
 **图片提取 JS 表达式**：
 ```json
-{"expression": "Array.from(new Set(Array.from(document.querySelectorAll(\"img\")).map(i => i.src).filter(s => s.includes(\"xhscdn\") && !s.includes(\"avatar\") && !s.includes(\"platform\"))))"}
+{"expression": "(() => { const root = document.querySelector(\"#noteContainer\"); if (!root) return []; const urls = []; root.querySelectorAll(\".media-container .swiper-slide:not(.swiper-slide-duplicate) .note-slider-img img, .media-container .swiper-slide:not(.swiper-slide-duplicate) img\").forEach(img => { let src = img.currentSrc || img.src || img.getAttribute(\"src\") || img.getAttribute(\"data-src\"); if (!src || !src.includes(\"xhscdn.com\") || src.includes(\"avatar\") || src.includes(\"comment\") || src.includes(\"platform\")) return; src = src.replace(/&amp;/g, \"&\"); if (!urls.includes(src)) urls.push(src); }); return urls; })()"}
 ```
 - 帖子图片 URL 包含 `notes_pre_post` 或 `spectrum`
 - 头像 URL 包含 `avatar`，平台资源包含 `platform` — 都要排除
@@ -176,7 +182,7 @@ curl -s -X POST http://127.0.0.1:58000/api/evaluate -H "Content-Type: applicatio
 - 点赞/收藏使用 `force=True` 穿透遮挡层
 - `dismiss_popups()` 用 JS evaluate 关闭弹窗/遮罩，覆盖确认按钮、dialog/modal、popup 容器
 - `api_evaluate(expression)` 调用 `/api/evaluate` 在页面执行任意 JS
-- 图片提取用 JS evaluate 的 `querySelectorAll('img')`（解决懒加载导致 0 张图片的问题）
+- 图片提取必须以 `#noteContainer .media-container` 为作用域，并排除 `.swiper-slide-duplicate`；禁止全页遍历 `img`
 - 检测 `<video>` 元素跳过视频帖，从候选队列补选图片帖
 - **JS 表达式转义问题**: `/api/evaluate` 的 expression 中避免嵌套双引号，用单引号代替。复杂表达式建议先在浏览器console测试
 - **搜索页URL编码**: 关键词需URL编码，如 `%E7%A2%A7%E8%93%9D%E8%88%AA%E7%BA%BF` = 碧蓝航线
@@ -184,7 +190,7 @@ curl -s -X POST http://127.0.0.1:58000/api/evaluate -H "Content-Type: applicatio
 - **帖子打开顺序**: 搜索结果中的帖子可以并行处理（独立打开、点赞、收藏、提取），但需注意 xsec_token 有效期
 - **JS 表达式转义陷阱**：`/api/evaluate` 的 expression 字段中不要用单引号包裹含 `includes()` 的字符串，会导致 `is not defined` 错误。用简单表达式，避免复杂嵌套引号
 - **视频帖占比高**: 搜索结果中高赞帖子很多是视频帖（特别是cosplay类），图片提取会返回 `"video"` 或空数组。建议：(1) 在搜索结果列表就用 `hasVideo` 过滤掉视频帖；(2) 如果连续3+个帖子都是视频，换搜索关键词或滚动加载更多
-- **图片容器变体**: 部分帖子的图片不在 `notes_pre_post` 路径下，而是在 `spectrum` 路径或无特定路径标记。用宽泛过滤 `s.includes("xhscdn") && !s.includes("avatar") && !s.includes("platform") && !s.includes("comment")` 兜底
+- **图片容器变体**: 不依赖 URL 中的 `notes_pre_post`/`spectrum` 字样，而依赖详情媒体容器的 DOM 作用域；不得退回全页图片查询
 - **详情页图片为空**: 帖子详情页有时图片以 base64 data URL 加载（`data:image/png;base64,...`），此时 `<img>` 的 `src` 不含 `xhscdn`，需要检查 `data-src` 属性或等待懒加载完成
 
 ## Gallery 集成
