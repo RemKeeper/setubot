@@ -84,7 +84,7 @@ category: social-media
 |------|--------|------|
 | 帖子卡片 | `section.note-item` | 搜索结果/推荐页的帖子容器 |
 | 帖子链接 | `section.note-item a.cover` | 帖子封面链接，含 xsec_token |
-| 帖子标题 | `.title` (在 note-item 内) | 帖子标题文本 |
+| 帖子标题 | `.title` (在 note-item 内) | 候选标题；必须与链接在同一卡片内提取，详情结果以 `#noteContainer h1.title` 为准 |
 | 点赞数 | `.like-wrapper .count` (在 note-item 内) | 帖子点赞数 |
 | 视频检测 | `video` (在 note-item 内) | 判断是否为视频帖 |
 | 详情容器 | `#noteContainer` | 所有详情页查询的根作用域 |
@@ -183,6 +183,9 @@ curl -s -X POST http://127.0.0.1:58000/api/evaluate -H "Content-Type: applicatio
 - `dismiss_popups()` 用 JS evaluate 关闭弹窗/遮罩，覆盖确认按钮、dialog/modal、popup 容器
 - `api_evaluate(expression)` 调用 `/api/evaluate` 在页面执行任意 JS
 - 图片提取必须以 `#noteContainer .media-container` 为作用域，并排除 `.swiper-slide-duplicate`；禁止全页遍历 `img`
+- 推荐页严禁分别正则提取全页链接和标题后按下标配对；必须逐个 `section.note-item` 同时读取标题与链接
+- 打开详情后校验最终 URL 的帖子 ID 与候选 ID 一致，并使用详情页 `#noteContainer h1.title` 覆盖候选标题
+- 多帖子发送时，每个帖子的标题、Tags 和图片必须连续组成一组，禁止先发送全部标题再发送全部图片
 - 检测 `<video>` 元素跳过视频帖，从候选队列补选图片帖
 - **JS 表达式转义问题**: `/api/evaluate` 的 expression 中避免嵌套双引号，用单引号代替。复杂表达式建议先在浏览器console测试
 - **搜索页URL编码**: 关键词需URL编码，如 `%E7%A2%A7%E8%93%9D%E8%88%AA%E7%BA%BF` = 碧蓝航线

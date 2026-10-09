@@ -47,8 +47,13 @@
 
 | 目标 | 选择器 | 说明 |
 |------|--------|------|
+| 帖子卡片 | `section.note-item` | 标题和链接必须在同一个卡片内提取，禁止分别收集后按数组下标拼接 |
+| 帖子链接 | `section.note-item a.cover` | 逐卡片读取 `href` |
+| 帖子标题 | `section.note-item .title` | 仅作为候选标题，进入详情后以 `#noteContainer h1.title` 为准 |
 | 点赞按钮 | `#noteContainer .engage-bar-style .like-wrapper` | 激活 class 为 `like-active`；force=true 穿透遮挡 |
 | 收藏按钮 | `#noteContainer .engage-bar-style .collect-wrapper` | 激活 class 为 `collect-active`；force=true 穿透遮挡 |
+
+进入详情页后必须从最终 `location.pathname` 提取帖子 ID，并与候选 ID 对比。ID 不一致时不得发送图片；标题必须使用当前 `#noteContainer h1.title`，防止重定向、旧容器或卡片列表变化导致错配。
 
 ## JS 表达式最佳实践
 

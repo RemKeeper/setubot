@@ -174,7 +174,9 @@ func collectXHSImages(results []xhsSetuResult, limit int) []string {
 }
 
 func (p *plugin) sendXHSImages(ctx *zero.Ctx, results []xhsSetuResult, images []string) {
-	nodes := make(message.Message, 0, len(results))
+	nodes := make(message.Message, 0, len(results)+len(images))
+	seen := make(map[string]struct{})
+	imageCount := 0
 	for _, result := range results {
 		title := strings.TrimSpace(result.Title)
 		if title != "" {
@@ -183,10 +185,24 @@ func (p *plugin) sendXHSImages(ctx *zero.Ctx, results []xhsSetuResult, images []
 		if len(result.Tags) > 0 {
 			nodes = append(nodes, p.forwardNode(ctx, "Tags: #"+strings.Join(result.Tags, " #")))
 		}
+		for _, imageURL := range result.Images {
+			imageURL = strings.TrimSpace(imageURL)
+			if imageURL == "" || imageCount >= maxXHSImages {
+				continue
+			}
+			if _, ok := seen[imageURL]; ok {
+				continue
+			}
+			seen[imageURL] = struct{}{}
+			nodes = append(nodes, p.forwardNode(ctx, message.Message{message.Image(imageURL)}))
+			imageCount++
+		}
 	}
-	if err := p.sendForwardImages(ctx, images, nodes, false); err != nil {
-		log.Printf("[agent/xhs] 合并发送图片失败: %v", err)
+	if imageCount == 0 {
+		return
 	}
+	log.Printf("[agent/xhs] 按帖子合并发送: sender=%d 帖子数=%d 图片数=%d 节点数=%d", ctx.Event.UserID, len(results), imageCount, len(nodes))
+	ctx.Send(nodes)
 }
 
 func (p *plugin) saveXHSLast(ctx *zero.Ctx, results []xhsSetuResult) error {

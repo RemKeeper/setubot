@@ -330,18 +330,21 @@ def build_detail_url_from_search(href: str) -> str:
 
 
 def dismiss_popups():
-    """用 JS 检测并关闭各种弹窗/遮罩层"""
+    """关闭明确的提示弹窗，不删除可能承载详情页的通用容器。"""
     js_dismiss = """
     (() => {
         let dismissed = 0;
-        document.querySelectorAll('.reds-alert-footer__right, .reds-button--primary, [class*="confirm"], [class*="close"]').forEach(el => {
-            if (el.offsetParent !== null) { el.click(); dismissed++; }
-        });
-        document.querySelectorAll('.reds-dialog-mask, .reds-modal-mask, [class*="mask"][class*="dialog"], [class*="overlay"]').forEach(el => {
-            el.remove(); dismissed++;
-        });
-        document.querySelectorAll('.reds-dialog, .reds-modal, [class*="popup"][class*="container"]').forEach(el => {
-            if (el.offsetParent !== null) { el.remove(); dismissed++; }
+        const selectors = [
+            '.reds-alert-footer__right',
+            '.reds-dialog .reds-button--primary',
+            '.login-container [class*="close"]',
+            '.reds-alert [class*="close"]'
+        ];
+        document.querySelectorAll(selectors.join(',')).forEach(el => {
+            if (el.offsetParent !== null && !el.closest('#noteContainer')) {
+                el.click();
+                dismissed++;
+            }
         });
         return dismissed;
     })()
@@ -357,25 +360,45 @@ def dismiss_popups():
 #  推荐页模式
 # ══════════════════════════════════════════════════════════════════════
 
-def extract_feed_posts(html: str) -> list[dict]:
-    """从推荐页 HTML 中提取帖子信息"""
-    posts = []
-    link_pattern = r'href="(/explore/([a-f0-9]+)\?xsec_token=([^"&]+)[^"]*)"'
-    link_matches = re.findall(link_pattern, html)
-    title_pattern = r'class="title"[^>]*><span[^>]*>([^<]+)</span>'
-    titles = re.findall(title_pattern, html)
+FEED_EXTRACT_JS = """
+Array.from(document.querySelectorAll("section.note-item")).map((card, index) => ({
+    index,
+    title: (card.querySelector(".title") || {}).textContent || "",
+    href: (card.querySelector("a.cover") || {}).href || ""
+})).filter(item => item.href)
+"""
 
+
+def extract_feed_posts() -> list[dict]:
+    """逐卡片提取推荐帖，保证标题与链接来自同一个 note-item。"""
+    response = api_evaluate(FEED_EXTRACT_JS)
+    if not response or not isinstance(response.get("result"), list):
+        return []
+
+    posts = []
     seen_ids = set()
-    for i, (full_path, note_id, xsec_token) in enumerate(link_matches):
-        if note_id in seen_ids:
+    for item in response["result"]:
+        href = str(item.get("href", "")).replace("&amp;", "&")
+        note_id = extract_note_id(href)
+        if not note_id or note_id in seen_ids:
             continue
         seen_ids.add(note_id)
 
-        xsec_token_clean = xsec_token.replace("&amp;", "&")
-        detail_url = f"https://www.xiaohongshu.com/discovery/item/{note_id}?xsec_token={xsec_token_clean}&xsec_source=pc_feed"
-
-        title = titles[len(posts)] if len(posts) < len(titles) else ""
-        posts.append({"title": title, "url": detail_url, "note_id": note_id})
+        parsed = urllib.parse.urlparse(href)
+        query = urllib.parse.parse_qs(parsed.query)
+        xsec_token = query.get("xsec_token", [""])[0]
+        xsec_source = query.get("xsec_source", [""])[0]
+        if not xsec_source:
+            xsec_source = "pc_search" if "/search_result/" in parsed.path else "pc_feed"
+        detail_query = urllib.parse.urlencode({
+            "xsec_token": xsec_token,
+            "xsec_source": xsec_source,
+        })
+        posts.append({
+            "title": str(item.get("title", "")).strip(),
+            "url": f"https://www.xiaohongshu.com/discovery/item/{note_id}?{detail_query}",
+            "note_id": note_id,
+        })
 
     return posts
 
@@ -580,22 +603,38 @@ def search_mode(args) -> list[dict]:
 # ══════════════════════════════════════════════════════════════════════
 
 def extract_detail_images_js() -> list[str]:
-    """仅从当前详情容器的正文轮播中提取图片 URL。"""
-    js_code = """
+    """按轮播索引从当前详情容器提取图片，优先使用非克隆节点。"""
+    js_code = r"""
     (() => {
         const root = document.querySelector("#noteContainer");
         if (!root) return [];
 
-        const selector = ".media-container .swiper-slide:not(.swiper-slide-duplicate) .note-slider-img img, " +
-                         ".media-container .swiper-slide:not(.swiper-slide-duplicate) img";
+        const slides = Array.from(root.querySelectorAll(".media-container .swiper-slide"));
+        slides.sort((a, b) => Number(a.classList.contains("swiper-slide-duplicate")) -
+                              Number(b.classList.contains("swiper-slide-duplicate")));
+        const selectedSlides = new Map();
+        slides.forEach((slide, position) => {
+            const index = slide.getAttribute("data-swiper-slide-index") || `position-${position}`;
+            if (!selectedSlides.has(index)) selectedSlides.set(index, slide);
+        });
+
         const urls = [];
-        root.querySelectorAll(selector).forEach(img => {
-            let src = img.currentSrc || img.src || img.getAttribute("src") || img.getAttribute("data-src");
+        Array.from(selectedSlides.entries())
+          .sort((a, b) => {
+              const ai = Number(a[0]);
+              const bi = Number(b[0]);
+              return Number.isFinite(ai) && Number.isFinite(bi) ? ai - bi : 0;
+          })
+          .forEach(([, slide]) => {
+            const img = slide.querySelector(".note-slider-img img, img");
+            if (!img) return;
+            const srcset = img.getAttribute("srcset") || "";
+            let src = img.currentSrc || img.getAttribute("src") || img.getAttribute("data-src") ||
+                      (srcset.split(",").pop() || "").trim().split(/\s+/)[0];
             if (!src) return;
             if (!src.includes("xhscdn.com")) return;
             if (src.startsWith("data:")) return;
             if (src.includes("avatar") || src.includes("comment") || src.includes("platform")) return;
-            if (img.closest(".swiper-slide-duplicate, .author-container, .comments-el, .comment-picture")) return;
             src = src.replace(/&amp;/g, "&");
             if (!urls.includes(src)) urls.push(src);
         });
@@ -682,6 +721,28 @@ def extract_detail_tags_js() -> list[dict]:
     return []
 
 
+def extract_detail_identity_js() -> dict:
+    """读取当前详情页的真实帖子 ID、标题和 URL。"""
+    js_code = r"""
+    (() => {
+        const root = document.querySelector("#noteContainer");
+        const match = location.pathname.match(/\/(?:explore|search_result)\/([a-f0-9]{24})/) ||
+                      location.pathname.match(/\/discovery\/item\/([a-f0-9]{24})/);
+        const titleNode = root && root.querySelector("h1.title, .note-content h1, .note-content .title");
+        return {
+            noteId: match ? match[1] : "",
+            title: titleNode ? (titleNode.textContent || "").trim() : "",
+            url: location.href,
+            hasContainer: !!root
+        };
+    })()
+    """
+    response = api_evaluate(js_code)
+    if response and isinstance(response.get("result"), dict):
+        return response["result"]
+    return {}
+
+
 def normalize_tag_for_match(tag: str) -> str:
     return re.sub(r"^#+", "", str(tag or "")).strip().lower()
 
@@ -742,6 +803,33 @@ def process_one_post(post: dict, require_positive_tag: bool = False, skip_engage
 
         dismiss_popups()
 
+        # 详情页可能重定向或复用旧容器；以后端最终页面为准校验 ID，并用详情标题覆盖卡片标题。
+        identity = extract_detail_identity_js()
+        actual_note_id = identity.get("noteId", "")
+        expected_note_id = post.get("note_id", "")
+        if not identity.get("hasContainer") or not actual_note_id:
+            print("  ⏭️ 详情容器尚未加载，跳过", file=sys.stderr)
+            result["skipped"] = True
+            result["skip_reason"] = "detail_not_loaded"
+            return result
+        if expected_note_id and actual_note_id != expected_note_id:
+            print(
+                f"  ⏭️ 详情页 ID 不一致: expected={expected_note_id}, actual={actual_note_id}",
+                file=sys.stderr,
+            )
+            result["skipped"] = True
+            result["skip_reason"] = "note_id_mismatch"
+            return result
+        result["note_id"] = actual_note_id
+        result["url"] = identity.get("url") or result["url"]
+        if identity.get("title"):
+            if result["title"] and result["title"] != identity["title"]:
+                print(
+                    f"  ℹ️ 使用详情标题替换卡片标题: {result['title']} -> {identity['title']}",
+                    file=sys.stderr,
+                )
+            result["title"] = identity["title"]
+
         # 2. 提取详情页 #话题标签，用于正向/反向 tag 命中
         tag_items = extract_detail_tags_js()
         tag_names = [t.get("tag", "") for t in tag_items if isinstance(t, dict) and t.get("tag")]
@@ -797,6 +885,10 @@ def process_one_post(post: dict, require_positive_tag: bool = False, skip_engage
         # 6. 提取图片
         images = extract_detail_images_js()
         result["images"] = images
+        if not images:
+            print("  ⏭️ 详情页未提取到正文图片，跳过", file=sys.stderr)
+            result["skipped"] = True
+            result["skip_reason"] = "image_empty"
 
     except Exception as e:
         print(f"  ❌ 处理帖子失败: {e}", file=sys.stderr)
@@ -890,8 +982,7 @@ def main():
         wait(1)
 
     print(f"🔍 提取帖子列表...", file=sys.stderr)
-    html = api_html()
-    posts = extract_feed_posts(html)
+    posts = extract_feed_posts()
     print(f"   找到 {len(posts)} 个帖子", file=sys.stderr)
 
     if not posts:
@@ -908,8 +999,7 @@ def main():
         for _ in range(3):
             api_scroll("down", 1000)
             wait(1.5)
-        html = api_html()
-        posts = extract_feed_posts(html)
+        posts = extract_feed_posts()
         print(f"   现在共 {len(posts)} 个帖子", file=sys.stderr)
         selected = filter_and_rank_posts(posts, count)
 
