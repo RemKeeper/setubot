@@ -2,7 +2,13 @@ module setubot
 
 go 1.26.2
 
-require github.com/wdvxdr1123/ZeroBot v1.8.2
+require (
+	github.com/HugoSmits86/nativewebp v1.3.0
+	github.com/blevesearch/bleve/v2 v2.6.0
+	github.com/sashabaranov/go-openai v1.41.2
+	github.com/wdvxdr1123/ZeroBot v1.8.2
+	golang.org/x/image v0.43.0
+)
 
 require (
 	github.com/FloatTech/ttl v0.0.0-20250224045156-012b1463287d // indirect
@@ -10,7 +16,6 @@ require (
 	github.com/RomiChan/syncx v0.0.0-20240418144900-b7402ffdebc7 // indirect
 	github.com/RomiChan/websocket v1.4.3-0.20251002072000-d3eb41798438 // indirect
 	github.com/bits-and-blooms/bitset v1.24.2 // indirect
-	github.com/blevesearch/bleve/v2 v2.6.0 // indirect
 	github.com/blevesearch/bleve_index_api v1.3.11 // indirect
 	github.com/blevesearch/geo v0.2.5 // indirect
 	github.com/blevesearch/go-faiss v1.1.0 // indirect
@@ -33,13 +38,11 @@ require (
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/json-iterator/go v0.0.0-20171115153421-f7279a603ede // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
-	github.com/sashabaranov/go-openai v1.41.2 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.0 // indirect
 	go.etcd.io/bbolt v1.4.0 // indirect
-	golang.org/x/image v0.43.0 // indirect
 	golang.org/x/net v0.51.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect

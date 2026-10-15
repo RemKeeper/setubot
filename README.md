@@ -107,6 +107,8 @@ go build -o setubot .
 - `vision.maxResultChars`：视觉模型结果返回主对话前的字符上限，默认 `12000`。
 - `vision.temperature`：视觉模型温度，建议使用较低值以减少识别结果臆测。
 - `taskGuard`：长流程任务约束配置；启用后，当用户请求命中关键词时会注入完成度约束提示，并可用 `maxSteps` 提高该轮工具循环上限。
+- `forwardImage.webpSurfacePath`：合并转发隐藏图（`webpHidden=true`）使用的表层图片路径，作为第一帧短暂显示。输出尺寸由隐藏图片决定。
+- `forwardImage.webpCacheMaxBytes`：隐藏图 WebP 缓存目录（`forward_image_webp_cache`）总大小上限，默认 `536870912`。
 - `debug`：是否记录请求体到 `debugLogPath`。公开部署建议关闭。
 
 ### `draw`

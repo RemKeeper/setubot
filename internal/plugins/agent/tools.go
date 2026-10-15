@@ -23,17 +23,17 @@ import (
 
 const (
 	forwardImageMaxBytes     = 80 << 20
-	forwardImageAPNGCacheDir = "forward_image_apng_cache"
+	forwardImageWebPCacheDir = "forward_image_webp_cache"
 )
 
 func (p *plugin) callSendForwardImages(ctx *zero.Ctx, args map[string]interface{}) (string, error) {
 	images := stringSliceArg(args, "images")
-	apngHidden := boolArg(args, "apngHidden", false)
-	if err := p.sendForwardImages(ctx, images, nil, apngHidden); err != nil {
+	webpHidden := boolArg(args, "webpHidden", false)
+	if err := p.sendForwardImages(ctx, images, nil, webpHidden); err != nil {
 		return "", err
 	}
-	if apngHidden {
-		return fmt.Sprintf("已合并发送 %d 张 APNG 隐藏图", len(cleanImageURLs(images, maxXHSImages))), nil
+	if webpHidden {
+		return fmt.Sprintf("已合并发送 %d 张 WebP 隐藏图", len(cleanImageURLs(images, maxXHSImages))), nil
 	}
 
 	return fmt.Sprintf("已合并发送 %d 张图片", len(cleanImageURLs(images, maxXHSImages))), nil
@@ -45,27 +45,27 @@ func (p *plugin) callSendForwardImageBatches(ctx *zero.Ctx, args map[string]inte
 		return "", fmt.Errorf("图片链接不能为空")
 	}
 	batchSize := clamp(numberArg(args, "batch_size", maxXHSImages), 1, maxXHSImages)
-	apngHidden := boolArg(args, "apngHidden", false)
+	webpHidden := boolArg(args, "webpHidden", false)
 	batches := splitImageBatches(images, batchSize)
 	for i, batch := range batches {
-		if err := p.sendForwardImages(ctx, batch, nil, apngHidden); err != nil {
+		if err := p.sendForwardImages(ctx, batch, nil, webpHidden); err != nil {
 			return "", fmt.Errorf("第 %d/%d 批发送失败：%w", i+1, len(batches), err)
 		}
 	}
 
-	if apngHidden {
-		return fmt.Sprintf("已分 %d 批发送 %d 张 APNG 隐藏图，每批最多 %d 张", len(batches), len(images), batchSize), nil
+	if webpHidden {
+		return fmt.Sprintf("已分 %d 批发送 %d 张 WebP 隐藏图，每批最多 %d 张", len(batches), len(images), batchSize), nil
 	}
 	return fmt.Sprintf("已分 %d 批发送 %d 张图片，每批最多 %d 张", len(batches), len(images), batchSize), nil
 }
 
-func (p *plugin) sendForwardImages(ctx *zero.Ctx, images []string, prefixNodes message.Message, apngHidden bool) error {
+func (p *plugin) sendForwardImages(ctx *zero.Ctx, images []string, prefixNodes message.Message, webpHidden bool) error {
 	images = cleanImageURLs(images, maxXHSImages)
 	if len(images) == 0 {
 		return fmt.Errorf("图片链接不能为空")
 	}
-	if apngHidden {
-		converted, err := p.buildForwardAPNGImages(images)
+	if webpHidden {
+		converted, err := p.buildForwardWebPImages(images)
 		if err != nil {
 			return err
 		}
@@ -90,20 +90,20 @@ func (p *plugin) sendForwardImages(ctx *zero.Ctx, images []string, prefixNodes m
 	return nil
 }
 
-func (p *plugin) buildForwardAPNGImages(images []string) ([]string, error) {
-	surfacePath := strings.TrimSpace(p.cfg.ForwardImage.APNGSurfacePath)
+func (p *plugin) buildForwardWebPImages(images []string) ([]string, error) {
+	surfacePath := strings.TrimSpace(p.cfg.ForwardImage.WebPSurfacePath)
 	if surfacePath == "" {
-		return nil, fmt.Errorf("apngHidden 需要先配置 agent.forwardImage.apngSurfacePath")
+		return nil, fmt.Errorf("webpHidden 需要先配置 agent.forwardImage.webpSurfacePath")
 	}
 	surfacePath, err := filepath.Abs(surfacePath)
 	if err != nil {
 		return nil, err
 	}
 	if _, err := os.Stat(surfacePath); err != nil {
-		return nil, fmt.Errorf("读取 APNG 表层图片失败: %w", err)
+		return nil, fmt.Errorf("读取 WebP 表层图片失败: %w", err)
 	}
 
-	cacheDir, err := filepath.Abs(filepath.Join(filepath.Dir(p.cfg.MemoryDir), forwardImageAPNGCacheDir))
+	cacheDir, err := filepath.Abs(filepath.Join(filepath.Dir(p.cfg.MemoryDir), forwardImageWebPCacheDir))
 	if err != nil {
 		return nil, err
 	}
@@ -121,19 +121,19 @@ func (p *plugin) buildForwardAPNGImages(images []string) ([]string, error) {
 			defer os.Remove(hiddenPath)
 		}
 
-		outputPath := filepath.Join(cacheDir, forwardAPNGOutputName(surfacePath, imageURL, i))
-		if _, err := BuildHiddenAPNG(surfacePath, hiddenPath, outputPath); err != nil {
-			return nil, fmt.Errorf("生成第 %d 张 APNG 隐藏图失败：%w", i+1, err)
+		outputPath := filepath.Join(cacheDir, forwardWebPOutputName(surfacePath, imageURL, i))
+		if _, err := BuildHiddenWebP(surfacePath, hiddenPath, outputPath); err != nil {
+			return nil, fmt.Errorf("生成第 %d 张 WebP 隐藏图失败：%w", i+1, err)
 		}
 		converted = append(converted, (&url.URL{Scheme: "file", Path: outputPath}).String())
 	}
 
-	maxCacheBytes := p.cfg.ForwardImage.APNGCacheMaxBytes
+	maxCacheBytes := p.cfg.ForwardImage.WebPCacheMaxBytes
 	if maxCacheBytes <= 0 {
 		maxCacheBytes = 512 << 20
 	}
 	if _, _, _, err := cleanupImageCacheBySize(cacheDir, maxCacheBytes); err != nil {
-		log.Printf("[agent/forward_images] 清理 APNG 图片缓存失败: %v", err)
+		log.Printf("[agent/forward_images] 清理 WebP 图片缓存失败: %v", err)
 	}
 
 	return converted, nil
@@ -208,9 +208,9 @@ func writeForwardTempImage(cacheDir string, key string, data []byte, ext string)
 	return path, true, nil
 }
 
-func forwardAPNGOutputName(surfacePath string, imageURL string, index int) string {
+func forwardWebPOutputName(surfacePath string, imageURL string, index int) string {
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%d", surfacePath, imageURL, index)))
-	return "hidden_" + hex.EncodeToString(sum[:])[:32] + ".png"
+	return "hidden_" + hex.EncodeToString(sum[:])[:32] + ".webp"
 }
 
 func splitImageBatches(images []string, batchSize int) [][]string {
@@ -473,14 +473,14 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 		functionTool("xhs_dislike", "撤销最近一次小红书帖子的点赞和收藏；可选把关键词加入负面列表。", map[string]interface{}{
 			"keyword": stringSchema("可选负面关键词，只有用户明确要求以后别推某类内容时填写"),
 		}, []string{}),
-		functionTool("send_forward_images", "把多个图片链接作为合并转发消息发送到当前聊天。合并转发节点的发送者会伪造成本次请求的发起人。apngHidden=true 时会先使用配置 agent.forwardImage.apngSurfacePath 指定的表层图，把每张输入图片转成隐藏帧 APNG 后发送。重要：若图片来源于 EH/EX 正文图片页或 EH/EX 图片直链，禁止把远端链接直接传给本工具；必须先调用 eh_download_images 下载到本地缓存，再只传返回的 file:/// 本地 fileUrl。", map[string]interface{}{
+		functionTool("send_forward_images", "把多个图片链接作为合并转发消息发送到当前聊天。合并转发节点的发送者会伪造成本次请求的发起人。webpHidden=true 时会先使用配置 agent.forwardImage.webpSurfacePath 指定的表层图，把每张输入图片转成隐藏帧 WebP 动图后发送。重要：若图片来源于 EH/EX 正文图片页或 EH/EX 图片直链，禁止把远端链接直接传给本工具；必须先调用 eh_download_images 下载到本地缓存，再只传返回的 file:/// 本地 fileUrl。", map[string]interface{}{
 			"images":     arrayStringSchema("图片链接列表，至少 1 个，最多 30 个"),
-			"apngHidden": boolSchema("可选；true 表示把每张图片作为隐藏帧生成 APNG 后再合并转发，表层图片来自配置 agent.forwardImage.apngSurfacePath"),
+			"webpHidden": boolSchema("可选；true 表示把每张图片作为隐藏帧生成 WebP 动图后再合并转发，表层图片来自配置 agent.forwardImage.webpSurfacePath"),
 		}, []string{"images"}),
-		functionTool("send_forward_images_batches", "原子化分批发送完整图片列表到当前聊天。适合一次要发送超过 30 张或要求多轮分批发送的长流程；工具会在内部按 batch_size 连续发送全部批次，不需要 agent 再多轮续调。apngHidden=true 时会先使用配置 agent.forwardImage.apngSurfacePath 指定的表层图，把每张输入图片转成隐藏帧 APNG 后发送。重要：若图片来源于 EH/EX 正文图片页或 EH/EX 图片直链，禁止把远端链接直接传给本工具；必须先调用 eh_download_images 下载到本地缓存，再只传返回的 file:/// 本地 fileUrl。", map[string]interface{}{
+		functionTool("send_forward_images_batches", "原子化分批发送完整图片列表到当前聊天。适合一次要发送超过 30 张或要求多轮分批发送的长流程；工具会在内部按 batch_size 连续发送全部批次，不需要 agent 再多轮续调。webpHidden=true 时会先使用配置 agent.forwardImage.webpSurfacePath 指定的表层图，把每张输入图片转成隐藏帧 WebP 动图后发送。重要：若图片来源于 EH/EX 正文图片页或 EH/EX 图片直链，禁止把远端链接直接传给本工具；必须先调用 eh_download_images 下载到本地缓存，再只传返回的 file:/// 本地 fileUrl。", map[string]interface{}{
 			"images":     arrayStringSchema("完整图片链接列表，至少 1 个；工具会去重并发送全部图片"),
 			"batch_size": numberSchema("可选；每批最多图片数，默认 30，范围 1-30"),
-			"apngHidden": boolSchema("可选；true 表示把每张图片作为隐藏帧生成 APNG 后再分批合并转发，表层图片来自配置 agent.forwardImage.apngSurfacePath"),
+			"webpHidden": boolSchema("可选；true 表示把每张图片作为隐藏帧生成 WebP 动图后再分批合并转发，表层图片来自配置 agent.forwardImage.webpSurfacePath"),
 		}, []string{"images"}),
 		functionTool("eh_download_images", "下载多个 EH/EX 正文图片直链到本地结构化缓存，并返回可传给 send_forward_images 或 send_forward_images_batches 的 file:/// 本地图片地址。缓存目录按 gallery_url 或 referer 中的 /g/{gid}/{token}/ 组织为 eh_image_cache/{gid}/{token}/；EH/EX 获取到的正文图片不得直接把远端链接传给合并转发工具，必须先通过本工具落地缓存。下载复用 EH 请求代理配置；缓存按 agent.ehReq.imageCacheMaxBytes 总大小自动清理。", map[string]interface{}{
 			"images":      arrayStringSchema("图片直链列表，至少 1 个；工具会返回对应 fileUrl"),

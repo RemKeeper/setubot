@@ -84,8 +84,13 @@ type VisionConfig struct {
 }
 
 type ForwardImageConfig struct {
-	APNGSurfacePath   string `json:"apngSurfacePath"`
-	APNGCacheMaxBytes int64  `json:"apngCacheMaxBytes"`
+	// WebPSurfacePath 是合成隐藏图时使用的表层图片路径（第一帧）。
+	WebPSurfacePath   string `json:"webpSurfacePath"`
+	WebPCacheMaxBytes int64  `json:"webpCacheMaxBytes"`
+
+	// 以下字段已废弃，仅为兼容旧配置文件保留。
+	LegacySurfacePath   string `json:"apngSurfacePath,omitempty"`
+	LegacyCacheMaxBytes int64  `json:"apngCacheMaxBytes,omitempty"`
 }
 
 type TaskGuardConfig struct {
@@ -390,9 +395,17 @@ func (cfg AgentConfig) withDefaults() AgentConfig {
 	if cfg.TaskGuard.CompletionPrompt == "" {
 		cfg.TaskGuard.CompletionPrompt = "当前请求疑似长流程任务。你必须维护任务进度：先判断总目标、已完成项和剩余项；只要仍有未完成项目，就继续调用合适工具推进，不要提前总结或声称完成。若存在可一次完成全部子任务的原子化工具，应优先调用该工具。"
 	}
-	if cfg.ForwardImage.APNGCacheMaxBytes <= 0 {
-		cfg.ForwardImage.APNGCacheMaxBytes = 512 << 20
+	if cfg.ForwardImage.WebPSurfacePath == "" && cfg.ForwardImage.LegacySurfacePath != "" {
+		cfg.ForwardImage.WebPSurfacePath = cfg.ForwardImage.LegacySurfacePath
 	}
+	if cfg.ForwardImage.WebPCacheMaxBytes <= 0 && cfg.ForwardImage.LegacyCacheMaxBytes > 0 {
+		cfg.ForwardImage.WebPCacheMaxBytes = cfg.ForwardImage.LegacyCacheMaxBytes
+	}
+	if cfg.ForwardImage.WebPCacheMaxBytes <= 0 {
+		cfg.ForwardImage.WebPCacheMaxBytes = 512 << 20
+	}
+	cfg.ForwardImage.LegacySurfacePath = ""
+	cfg.ForwardImage.LegacyCacheMaxBytes = 0
 	if cfg.Browser.BaseURL == "" {
 		cfg.Browser.BaseURL = "http://127.0.0.1:58000"
 	}
