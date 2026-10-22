@@ -3,9 +3,11 @@ package agent
 import (
 	"fmt"
 	"strings"
+
+	zero "github.com/wdvxdr1123/ZeroBot"
 )
 
-func (p *plugin) runBrowserSubagent(goal string, startURL string) (string, error) {
+func (p *plugin) runBrowserSubagent(ctx *zero.Ctx, goal string, startURL string) (string, error) {
 	if !p.cfg.Browser.Enabled {
 		return "", fmt.Errorf("浏览器工具未启用")
 	}
@@ -24,9 +26,14 @@ func (p *plugin) runBrowserSubagent(goal string, startURL string) (string, error
 	return p.runSubagent(subagentSpec{
 		kind:            "browser_subagent",
 		system:          system,
-		tools:           browserToolDefinitions(),
+		tools:           withSay(browserToolDefinitions()),
 		maxSteps:        p.cfg.Browser.MaxSubagentSteps,
 		toolResultChars: p.cfg.Browser.MaxResultChars,
-		execute:         browserToolExecutor(p),
+		execute: func(name string, rawArgs string) string {
+			if name == "say" {
+				return p.callTool(ctx, name, rawArgs)
+			}
+			return browserToolExecutor(p)(name, rawArgs)
+		},
 	}, goal)
 }

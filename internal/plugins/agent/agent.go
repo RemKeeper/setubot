@@ -1179,6 +1179,9 @@ func (p *plugin) callTool(ctx *zero.Ctx, name string, rawArgs string) string {
 	}
 
 	switch name {
+	case "say":
+		content, err := p.callSay(ctx, args)
+		return toolResult(content, err)
 	case "read_skill":
 		content, err := p.readSkillFile(stringArg(args, "name"))
 		return toolResult(content, err)

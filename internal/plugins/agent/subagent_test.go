@@ -28,7 +28,7 @@ func delegationTestConfig() config.AgentConfig {
 func TestToolDefinitionsDelegatesHeavyFlowsToTasks(t *testing.T) {
 	p := &plugin{cfg: delegationTestConfig()}
 	tools := p.toolDefinitions()
-	for _, name := range []string{"eh_task", "torrent_task", "research_task", "browser_task", "write_memory", "xhs_setu", "send_forward_images"} {
+	for _, name := range []string{"say", "eh_task", "torrent_task", "research_task", "browser_task", "write_memory", "xhs_setu", "send_forward_images"} {
 		if !hasToolDefinition(tools, name) {
 			t.Fatalf("main agent should expose %s", name)
 		}
@@ -131,6 +131,25 @@ func TestRunSubagentLoopsUntilReport(t *testing.T) {
 	}
 	if !rejected {
 		t.Fatal("tool outside the spec should be rejected")
+	}
+}
+
+func TestCallSayRejectsEmpty(t *testing.T) {
+	p := &plugin{}
+	got := p.callTool(nil, "say", `{"text":"  "}`)
+	if !strings.Contains(got, "不能为空") {
+		t.Fatalf("empty say should be rejected, got %q", got)
+	}
+}
+
+func TestSayGuidanceUsesRoleplayVoice(t *testing.T) {
+	p := &plugin{}
+	if strings.Contains(p.sayGuidance(), "角色台词") {
+		t.Fatal("say guidance should stay factual when roleplay is off")
+	}
+	p.cfg.Roleplay.Enabled = true
+	if !strings.Contains(p.sayGuidance(), "角色台词") {
+		t.Fatal("roleplay say guidance should require in-character lines")
 	}
 }
 

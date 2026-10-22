@@ -10,8 +10,9 @@ import (
 	zero "github.com/wdvxdr1123/ZeroBot"
 )
 
-const subagentBaseSystem = `你是幕后执行子任务的工作代理，不参与角色扮演，也不直接与用户对话。
+const subagentBaseSystem = `你是幕后执行子任务的工作代理。除了 say 发出的消息，你不把执行过程写给用户。
 - 只完成给定任务，按需调用工具，持续推进直到完成、确认无法完成，或遇到必须由用户决定的分歧。
+- 需要让用户马上知道收到、进展、转折或等待时，立刻调用 say。不要攒到结束才说。
 - 只依据工具真实返回的内容行动和汇报，不要编造结果；工具报错时可以合理重试或换路径，但不要无限重试。
 - 中间工具结果只用于本次任务，不会进入主对话。
 - 结束时不要再调用工具，直接输出一份简洁的中文执行报告，格式如下：
@@ -83,9 +84,13 @@ func (p *plugin) runSubagent(spec subagentSpec, goal string) (string, error) {
 		}
 	}
 
+	system := spec.system
+	if _, ok := allowed["say"]; ok {
+		system += p.sayGuidance()
+	}
 	// 目标同时写入 system，避免上下文裁剪掉首条 user 消息后子代理丢失任务。
 	messages := []chatMessage{
-		{Role: openai.ChatMessageRoleSystem, Content: spec.system + "\n\n## 本次任务\n" + goal},
+		{Role: openai.ChatMessageRoleSystem, Content: system + "\n\n## 本次任务\n" + goal},
 		{Role: openai.ChatMessageRoleUser, Content: goal},
 	}
 	log.Printf("[agent/subagent] kind=%s 开始执行，最大步数=%d", spec.kind, maxSteps)
@@ -208,7 +213,7 @@ func (p *plugin) runEHTask(ctx *zero.Ctx, goal string) (string, error) {
 		}
 	}
 
-	tools := append(ehToolDefinitions(), forwardImageToolDefinitions()...)
+	tools := withSay(append(ehToolDefinitions(), forwardImageToolDefinitions()...))
 	return p.runSubagent(subagentSpec{
 		kind:    "eh_task",
 		system:  system,
@@ -225,7 +230,7 @@ func (p *plugin) runTorrentTask(ctx *zero.Ctx, goal string) (string, error) {
 	return p.runSubagent(subagentSpec{
 		kind:    "torrent_task",
 		system:  system,
-		tools:   []openai.Tool{qbittorrentToolDefinition()},
+		tools:   withSay([]openai.Tool{qbittorrentToolDefinition()}),
 		execute: p.toolExecutor(ctx),
 	}, goal)
 }
@@ -238,7 +243,7 @@ func (p *plugin) runResearchTask(ctx *zero.Ctx, goal string) (string, error) {
 	return p.runSubagent(subagentSpec{
 		kind:    "research_task",
 		system:  system,
-		tools:   []openai.Tool{exaToolDefinition()},
+		tools:   withSay([]openai.Tool{exaToolDefinition()}),
 		execute: p.toolExecutor(ctx),
 	}, goal)
 }
@@ -253,7 +258,7 @@ func (p *plugin) callTask(ctx *zero.Ctx, name string, args map[string]interface{
 	case "research_task":
 		return p.runResearchTask(ctx, goal)
 	case "browser_task":
-		return p.runBrowserSubagent(goal, stringArg(args, "start_url"))
+		return p.runBrowserSubagent(ctx, goal, stringArg(args, "start_url"))
 	default:
 		return "", fmt.Errorf("未知子任务：%s", name)
 	}

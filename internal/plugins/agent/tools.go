@@ -445,8 +445,30 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 	return tools
 }
 
+func sayToolDefinition() openai.Tool {
+	return functionTool("say", "立刻向当前聊天发送一条消息。任何时候都可以调用，包括刚收到请求、任务中途、出现转折或需要用户马上看到的时候。text 会原样发出。本轮结束时如果不再调用工具，最终回复还会再发一次，不要用 say 重复那一句最终回复。", map[string]interface{}{
+		"text": stringSchema("要发到当前聊天的原文"),
+	}, []string{"text"})
+}
+
+func withSay(tools []openai.Tool) []openai.Tool {
+	return append([]openai.Tool{sayToolDefinition()}, tools...)
+}
+
+func (p *plugin) callSay(ctx *zero.Ctx, args map[string]interface{}) (string, error) {
+	text := strings.TrimSpace(stringArg(args, "text"))
+	if text == "" {
+		return "", fmt.Errorf("发言内容不能为空")
+	}
+	text = truncate(text, p.cfg.MaxResponseChars)
+	log.Printf("[agent/say] 发送到聊天，长度=%d", len([]rune(text)))
+	ctx.Send(text)
+	return "已发送到当前聊天", nil
+}
+
 func (p *plugin) coreToolDefinitions() []openai.Tool {
 	return []openai.Tool{
+		sayToolDefinition(),
 		{
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
