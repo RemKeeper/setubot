@@ -109,6 +109,21 @@
       "defaultShareRatio": 1.0,
       "ptKeywords": [],
       "timeout": 15
+    },
+    "subagent": {
+      "enabled": true,
+      "model": "",
+      "temperature": 0.2,
+      "maxSteps": 16,
+      "maxResultChars": 6000,
+      "ehSkillFile": "EH_SKILL.md"
+    },
+    "roleplay": {
+      "enabled": false,
+      "thinkingText": "",
+      "errorText": "唔……刚才好像出了点状况，稍后再试试吧。",
+      "historyToolResultChars": 300,
+      "guidelines": ""
     }
   }
 }

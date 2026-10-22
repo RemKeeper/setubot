@@ -241,10 +241,12 @@ func (p *plugin) agentCommand(ctx *zero.Ctx, prompt string) {
 		prompt = matches[1]
 	}
 
-	ctx.Send("Agent 正在思考...")
+	if text := p.thinkingText(); text != "" {
+		ctx.Send(text)
+	}
 	answer, err := p.runAgent(ctx, strings.TrimSpace(prompt))
 	if err != nil {
-		ctx.Send(fmt.Sprintf("Agent 执行失败：%v", err))
+		ctx.Send(p.failureReply(err))
 		return
 	}
 
@@ -260,26 +262,10 @@ func (p *plugin) resetContext(ctx *zero.Ctx) {
 
 func (p *plugin) runAgent(ctx *zero.Ctx, prompt string) (string, error) {
 	sessionKey := p.sessionKey(ctx)
-	skills, _ := p.listSkillNames()
-	system := p.cfg.SystemPrompt
-	if system == "" {
-		system = "你是一个简洁可靠的中文 AI 助手。必要时可以调用工具读取 skill、搜索/读写记忆、控制浏览器。"
-	}
-	system += "\n长期记忆策略：你只能使用当前聊天作用域内的记忆。群聊记忆按群隔离，不要把不同群的偏好、约定或上下文混用。若用户明确表达稳定偏好、长期事实、后续要遵守的规则或项目约定，应调用 write_memory 保存；若问题可能依赖过往偏好或约定，应主动调用 search_memory 补充检索。不要保存敏感信息、一次性临时信息或未经确认的猜测。"
-	if len(skills) > 0 {
-		system += "\n可用 skills：" + strings.Join(skills, ", ")
-	}
-	if p.visionToolEnabled() && p.hasRequestImages(ctx) {
-		system += "\n当前用户消息或其引用消息包含图片，但主模型不会直接接收图片。你必须调用 analyze_images 工具，把用户对图片的要求作为 prompt 传入；收到识图结果后再结合对话回答。不要仅凭图片占位符猜测内容。"
-	}
-	system += p.requestIdentityContext(ctx)
-	taskGuardActive := p.taskGuardActive(prompt)
+	system := p.mainSystemPrompt(ctx, prompt)
 	maxToolRounds := p.cfg.MaxToolRounds
-	if taskGuardActive {
-		system += "\n长流程任务约束：" + p.cfg.TaskGuard.CompletionPrompt
-		if p.cfg.TaskGuard.MaxSteps > maxToolRounds {
-			maxToolRounds = p.cfg.TaskGuard.MaxSteps
-		}
+	if p.taskGuardActive(prompt) && p.cfg.TaskGuard.MaxSteps > maxToolRounds {
+		maxToolRounds = p.cfg.TaskGuard.MaxSteps
 	}
 
 	turnMessages := []chatMessage{p.userChatMessage(ctx, prompt)}
@@ -660,7 +646,7 @@ func (p *plugin) sessionHistory(sessionKey string) (string, []chatMessage) {
 }
 
 func (p *plugin) appendSession(sessionKey string, messages []chatMessage) {
-	messages = compactMessagesForSession(messages)
+	messages = compactMessagesForSessionWithLimit(messages, p.sessionToolResultChars())
 	p.sessionM.Lock()
 	session, ok := p.sessions[sessionKey]
 	if !ok {
@@ -731,6 +717,9 @@ func (p *plugin) summarizeSession(sessionKey string) {
 
 func (p *plugin) summarizeContext(previousSummary string, messages []chatMessage) (string, error) {
 	content := "请把以下对话压缩成可延续多轮对话的中文上下文摘要。保留用户目标、关键事实、已完成操作、工具结果、未解决问题和偏好。不要添加不存在的信息。"
+	if p.cfg.Roleplay.Enabled {
+		content = "请把以下角色扮演对话压缩成可延续多轮对话的中文上下文摘要。保留用户目标与偏好、关键事实、角色与用户之间的关系进展和情绪氛围、已经为用户做过的事情（工具与子任务只用一句话概括结果，不保留链接、JSON、参数等技术细节）以及未解决的问题。摘要使用第三人称客观叙述，不要添加不存在的信息。"
+	}
 	if strings.TrimSpace(previousSummary) != "" {
 		content += "\n\n已有摘要：\n" + previousSummary
 	}
@@ -863,11 +852,17 @@ func trimContextMessages(messages []chatMessage, maxTurns int) []chatMessage {
 	return sanitizeToolMessagePairs(trimmed)
 }
 
+const defaultSessionToolResultChars = 4000
+
 func compactMessagesForSession(messages []chatMessage) []chatMessage {
+	return compactMessagesForSessionWithLimit(messages, defaultSessionToolResultChars)
+}
+
+func compactMessagesForSessionWithLimit(messages []chatMessage, maxToolChars int) []chatMessage {
 	compacted := append([]chatMessage(nil), messages...)
 	for i := range compacted {
 		if compacted[i].Role == openai.ChatMessageRoleTool {
-			compacted[i].Content = truncateRunes(compacted[i].Content, 4000)
+			compacted[i].Content = truncateRunes(compacted[i].Content, maxToolChars)
 		}
 	}
 	return normalizeChatMessages(compacted)
@@ -1024,12 +1019,18 @@ func (p *plugin) chat(messages []chatMessage) (*openai.ChatCompletionResponse, e
 }
 
 func (p *plugin) chatWithTools(kind string, messages []chatMessage, tools []openai.Tool) (*openai.ChatCompletionResponse, error) {
+	return p.chatWithToolsOptions(kind, p.currentModel(), float32(p.cfg.Temperature), messages, tools, "auto")
+}
+
+func (p *plugin) chatWithToolsOptions(kind string, model string, temperature float32, messages []chatMessage, tools []openai.Tool, toolChoice string) (*openai.ChatCompletionResponse, error) {
 	req := openai.ChatCompletionRequest{
-		Model:       p.currentModel(),
+		Model:       model,
 		Messages:    messages,
-		Tools:       tools,
-		ToolChoice:  "auto",
-		Temperature: float32(p.cfg.Temperature),
+		Temperature: temperature,
+	}
+	if len(tools) > 0 {
+		req.Tools = tools
+		req.ToolChoice = toolChoice
 	}
 	p.debugLogChatRequest(kind, req)
 	resp, err := p.aiClient.CreateChatCompletion(context.Background(), req)
@@ -1238,8 +1239,8 @@ func (p *plugin) callTool(ctx *zero.Ctx, name string, rawArgs string) string {
 	case "qbittorrent":
 		content, err := p.callQBittorrent(ctx, args)
 		return toolResult(content, err)
-	case "browser_task":
-		content, err := p.runBrowserSubagent(stringArg(args, "goal"), stringArg(args, "start_url"))
+	case "eh_task", "torrent_task", "research_task", "browser_task":
+		content, err := p.callTask(ctx, name, args)
 		return toolResult(content, err)
 	case "analyze_images":
 		content, err := p.callAnalyzeImages(ctx, stringArg(args, "prompt"))

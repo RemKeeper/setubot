@@ -60,6 +60,39 @@ type AgentConfig struct {
 	EHTag               EHTagConfig            `json:"ehTag"`
 	EHReq               EHReqConfig            `json:"ehReq"`
 	QBittorrent         QBittorrentConfig      `json:"qbittorrent"`
+	Subagent            SubagentConfig         `json:"subagent"`
+	Roleplay            RoleplayConfig         `json:"roleplay"`
+}
+
+// SubagentConfig 控制 eh_task / torrent_task / research_task 等幕后子任务代理。
+type SubagentConfig struct {
+	// Enabled 为 nil 时默认开启；关闭后主 agent 直接持有全部原子工具。
+	Enabled *bool `json:"enabled"`
+	// Model 为空时复用主模型（含运行时切换后的模型）。
+	Model string `json:"model"`
+	// Temperature > 0 时生效，默认 0.2。
+	Temperature    float64 `json:"temperature"`
+	MaxSteps       int     `json:"maxSteps"`
+	MaxResultChars int     `json:"maxResultChars"`
+	// EHSkillFile 会注入 eh_task 子代理的 system prompt，并对主 agent 隐藏。
+	EHSkillFile string `json:"ehSkillFile"`
+}
+
+// RoleplayConfig 控制主 agent 的角色扮演沉浸体验。
+type RoleplayConfig struct {
+	Enabled bool `json:"enabled"`
+	// ThinkingText 为空时不发送“思考中”提示。
+	ThinkingText string `json:"thinkingText"`
+	// ErrorText 支持 {error} 占位符。
+	ErrorText string `json:"errorText"`
+	// HistoryToolResultChars 是写入会话历史时每条工具结果保留的字符数。
+	HistoryToolResultChars int `json:"historyToolResultChars"`
+	// Guidelines 为空时使用内置角色扮演约束。
+	Guidelines string `json:"guidelines"`
+}
+
+func (cfg SubagentConfig) IsEnabled() bool {
+	return cfg.Enabled == nil || *cfg.Enabled
 }
 
 type HistoryBootstrapConfig struct {
@@ -462,6 +495,24 @@ func (cfg AgentConfig) withDefaults() AgentConfig {
 	}
 	if cfg.QBittorrent.Timeout <= 0 {
 		cfg.QBittorrent.Timeout = 15
+	}
+	if cfg.Subagent.Temperature <= 0 {
+		cfg.Subagent.Temperature = 0.2
+	}
+	if cfg.Subagent.MaxSteps <= 0 {
+		cfg.Subagent.MaxSteps = 16
+	}
+	if cfg.Subagent.MaxResultChars <= 0 {
+		cfg.Subagent.MaxResultChars = 6000
+	}
+	if cfg.Subagent.EHSkillFile == "" {
+		cfg.Subagent.EHSkillFile = "EH_SKILL.md"
+	}
+	if cfg.Roleplay.HistoryToolResultChars <= 0 {
+		cfg.Roleplay.HistoryToolResultChars = 300
+	}
+	if cfg.Roleplay.ErrorText == "" {
+		cfg.Roleplay.ErrorText = "唔……刚才好像出了点状况，稍后再试试吧。"
 	}
 
 	return cfg

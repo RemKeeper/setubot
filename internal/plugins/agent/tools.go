@@ -420,8 +420,33 @@ func (p *plugin) browserRequest(method string, path string, body io.Reader) (str
 	return result, nil
 }
 
+// toolDefinitions 返回主 agent 可见的工具。启用子代理时，多步、数据量大的流程只以 *_task 委托工具出现。
 func (p *plugin) toolDefinitions() []openai.Tool {
-	tools := []openai.Tool{
+	tools := p.coreToolDefinitions()
+	tools = append(tools, forwardImageToolDefinitions()...)
+	if p.visionToolEnabled() {
+		tools = append(tools, analyzeImagesToolDefinition())
+	}
+
+	if p.subagentsEnabled() {
+		return append(tools, p.taskToolDefinitions()...)
+	}
+
+	tools = append(tools, ehToolDefinitions()...)
+	if p.cfg.Exa.Enabled {
+		tools = append(tools, exaToolDefinition())
+	}
+	if p.cfg.QBittorrent.Enabled {
+		tools = append(tools, qbittorrentToolDefinition())
+	}
+	if p.cfg.Browser.Enabled {
+		tools = append(tools, browserTaskToolDefinition())
+	}
+	return tools
+}
+
+func (p *plugin) coreToolDefinitions() []openai.Tool {
+	return []openai.Tool{
 		{
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
@@ -473,6 +498,11 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 		functionTool("xhs_dislike", "撤销最近一次小红书帖子的点赞和收藏；可选把关键词加入负面列表。", map[string]interface{}{
 			"keyword": stringSchema("可选负面关键词，只有用户明确要求以后别推某类内容时填写"),
 		}, []string{}),
+	}
+}
+
+func forwardImageToolDefinitions() []openai.Tool {
+	return []openai.Tool{
 		functionTool("send_forward_images", "把多个图片链接作为合并转发消息发送到当前聊天。合并转发节点的发送者会伪造成本次请求的发起人。webpHidden=true 时会先使用配置 agent.forwardImage.webpSurfacePath 指定的表层图，把每张输入图片转成隐藏帧 WebP 动图后发送。重要：若图片来源于 EH/EX 正文图片页或 EH/EX 图片直链，禁止把远端链接直接传给本工具；必须先调用 eh_download_images 下载到本地缓存，再只传返回的 file:/// 本地 fileUrl。", map[string]interface{}{
 			"images":     arrayStringSchema("图片链接列表，至少 1 个，最多 30 个"),
 			"webpHidden": boolSchema("可选；true 表示把每张图片作为隐藏帧生成 WebP 动图后再合并转发，表层图片来自配置 agent.forwardImage.webpSurfacePath"),
@@ -482,6 +512,11 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 			"batch_size": numberSchema("可选；每批最多图片数，默认 30，范围 1-30"),
 			"webpHidden": boolSchema("可选；true 表示把每张图片作为隐藏帧生成 WebP 动图后再分批合并转发，表层图片来自配置 agent.forwardImage.webpSurfacePath"),
 		}, []string{"images"}),
+	}
+}
+
+func ehToolDefinitions() []openai.Tool {
+	return []openai.Tool{
 		functionTool("eh_download_images", "下载多个 EH/EX 正文图片直链到本地结构化缓存，并返回可传给 send_forward_images 或 send_forward_images_batches 的 file:/// 本地图片地址。缓存目录按 gallery_url 或 referer 中的 /g/{gid}/{token}/ 组织为 eh_image_cache/{gid}/{token}/；EH/EX 获取到的正文图片不得直接把远端链接传给合并转发工具，必须先通过本工具落地缓存。下载复用 EH 请求代理配置；缓存按 agent.ehReq.imageCacheMaxBytes 总大小自动清理。", map[string]interface{}{
 			"images":      arrayStringSchema("图片直链列表，至少 1 个；工具会返回对应 fileUrl"),
 			"referer":     stringSchema("可选 Referer，建议传对应详情页或图片页 URL"),
@@ -537,61 +572,54 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 			"reload_key": stringSchema("可选 nl reload key"),
 		}, []string{"image_hash", "gid", "page_no"}),
 	}
-	if p.visionToolEnabled() {
-		tools = append(tools, functionTool("analyze_images", "使用独立视觉模型分析当前用户消息及其引用消息中携带的图片。主模型看不到图片本身，遇到图片理解、OCR、内容描述、对比或基于图片回答的问题时必须调用本工具。", map[string]interface{}{
-			"prompt": stringSchema("交给视觉模型的具体识图要求，应包含用户原问题以及需要关注的文字、物体、人物、布局、差异等信息"),
-		}, []string{"prompt"}))
-	}
-	if p.cfg.Exa.Enabled {
-		tools = append(tools, functionTool("exa_search", "使用 Exa.ai 搜索互联网，返回标题、URL、发布时间、作者和 highlights 摘要。适合查询实时信息、网页资料和需要来源的问题。", map[string]interface{}{
-			"query":           stringSchema("搜索查询，使用自然语言描述要找的信息"),
-			"type":            enumSchema("搜索类型，默认使用配置值", []string{"auto", "fast", "instant", "deep-lite", "deep", "deep-reasoning"}),
-			"num_results":     numberSchema("返回结果数量，默认使用配置值，范围 1-10"),
-			"category":        stringSchema("可选分类，如 news、research paper、company、people、personal site、financial report"),
-			"include_domains": arrayStringSchema("可选，仅包含这些域名"),
-			"exclude_domains": arrayStringSchema("可选，排除这些域名；company/people 分类不要使用"),
-			"live":            boolSchema("是否强制实时抓取。true 会设置 contents.maxAgeHours=0，可能更慢"),
-		}, []string{"query"}))
-	}
+}
 
-	if p.cfg.QBittorrent.Enabled {
-		tools = append(tools, functionTool("qbittorrent", "远程控制 qBittorrent 下载器：添加磁力链接/种子下载，并管理任务。添加任务时自动判定：任务名或 tracker 命中配置 agent.qbittorrent.ptKeywords 白名单关键词的 PT 资源不限上传（分享率 -1、做种不限）；非 PT 公开种子需要你自己决定文件取舍——建议 paused=true 添加后用 files 查看文件列表，根据文件名与大小用 file_prio 剔除广告/推广文件（如 *.url、广告*.txt、*推广*.exe、www.* 等）仅保留需要内容，再 resume。保存位置默认在配置 defaultSavePath 下，可根据种子信息与内容用 subdirectory 指定子目录，或用 move 事后调整。配置 agent.qbittorrent.ownerOnly=true 时仅主人可用，权限由工具强制校验，调用失败时不要臆测原因。", map[string]interface{}{
-			"action":                      enumSchema("要执行的操作", []string{"add", "list", "status", "pause", "resume", "delete", "share_limit", "reannounce", "trackers", "add_tracker", "edit_tracker", "remove_tracker", "global_trackers", "files", "file_prio", "move", "set_category"}),
-			"urls":                        arrayStringSchema("add：磁力链接或种子 URL 列表，至少 1 个"),
-			"url":                         stringSchema("add：单个磁力链接或种子 URL（与 urls 二选一）"),
-			"hash":                        stringSchema("status/trackers/add_tracker/edit_tracker/remove_tracker/files/file_prio：任务 hash"),
-			"hashes":                      arrayStringSchema("pause/resume/delete/share_limit/reannounce/move/set_category：任务 hash 列表"),
-			"trackers":                    arrayStringSchema("add_tracker/remove_tracker/global_trackers：tracker URL 列表；单任务添加支持多条，全局设置用换行保存"),
-			"original_url":                stringSchema("edit_tracker：要替换的原 tracker URL"),
-			"new_url":                     stringSchema("edit_tracker：新的 tracker URL"),
-			"set":                         boolSchema("global_trackers：是否写入全局默认 tracker；false 仅查看"),
-			"enabled":                     boolSchema("global_trackers：是否启用新任务自动添加全局 tracker"),
-			"save_path":                   stringSchema("add/move：完整保存路径；不传则用 subdirectory 或默认目录"),
-			"subdirectory":                stringSchema("add/move：默认下载目录下的子目录，根据种子内容/信息决定"),
-			"category":                    stringSchema("add/move/set_category：任务分类"),
-			"tags":                        arrayStringSchema("add：可选任务标签"),
-			"paused":                      boolSchema("add：是否以暂停状态添加。非 PT 资源建议 true，先筛选文件再开始下载"),
-			"list_files":                  boolSchema("add：添加后是否直接返回文件列表，便于立即决定文件取舍"),
-			"rename":                      stringSchema("add：可选重命名任务"),
-			"exclude":                     arrayIntSchema("file_prio：不下载的文件索引列表"),
-			"include":                     arrayIntSchema("file_prio：仅下载的文件索引列表"),
-			"delete_files":                boolSchema("delete：是否同时删除本地文件，默认 false"),
-			"ratio_limit":                 numberSchema("share_limit：分享率限制（-1 不限，-2 用全局，正数为倍率），默认 -1"),
-			"seeding_time_limit":          numberSchema("share_limit：做种时间限制（分钟，-1 不限，-2 用全局）"),
-			"inactive_seeding_time_limit": numberSchema("share_limit：非活跃做种时间限制（分钟，-1 不限，-2 用全局；qBittorrent 4.6+ 必填）"),
-			"filter":                      enumSchema("list：按状态过滤", []string{"all", "downloading", "seeding", "completed", "paused", "active", "inactive", "stalled", "errored"}),
-			"limit":                       numberSchema("list/files：最多返回条数，list 默认 50，files 默认 200"),
-		}, []string{"action"}))
-	}
+func analyzeImagesToolDefinition() openai.Tool {
+	return functionTool("analyze_images", "使用独立视觉模型分析当前用户消息及其引用消息中携带的图片。主模型看不到图片本身，遇到图片理解、OCR、内容描述、对比或基于图片回答的问题时必须调用本工具。", map[string]interface{}{
+		"prompt": stringSchema("交给视觉模型的具体识图要求，应包含用户原问题以及需要关注的文字、物体、人物、布局、差异等信息"),
+	}, []string{"prompt"})
+}
 
-	if !p.cfg.Browser.Enabled {
-		return tools
-	}
+func exaToolDefinition() openai.Tool {
+	return functionTool("exa_search", "使用 Exa.ai 搜索互联网，返回标题、URL、发布时间、作者和 highlights 摘要。适合查询实时信息、网页资料和需要来源的问题。", map[string]interface{}{
+		"query":           stringSchema("搜索查询，使用自然语言描述要找的信息"),
+		"type":            enumSchema("搜索类型，默认使用配置值", []string{"auto", "fast", "instant", "deep-lite", "deep", "deep-reasoning"}),
+		"num_results":     numberSchema("返回结果数量，默认使用配置值，范围 1-10"),
+		"category":        stringSchema("可选分类，如 news、research paper、company、people、personal site、financial report"),
+		"include_domains": arrayStringSchema("可选，仅包含这些域名"),
+		"exclude_domains": arrayStringSchema("可选，排除这些域名；company/people 分类不要使用"),
+		"live":            boolSchema("是否强制实时抓取。true 会设置 contents.maxAgeHours=0，可能更慢"),
+	}, []string{"query"})
+}
 
-	return append(tools, functionTool("browser_task", "使用隔离的浏览器子代理完成多步网页操作。子代理独立维护临时上下文，HTML、evaluate 等中间结果不会进入主对话历史；只返回简洁的最终结果。", map[string]interface{}{
-		"goal":      stringSchema("要完成的浏览器任务、需要提取的信息及成功条件"),
-		"start_url": stringSchema("可选起始 URL；未填写时从浏览器当前页面开始"),
-	}, []string{"goal"}))
+func qbittorrentToolDefinition() openai.Tool {
+	return functionTool("qbittorrent", "远程控制 qBittorrent 下载器：添加磁力链接/种子下载，并管理任务。添加任务时自动判定：任务名或 tracker 命中配置 agent.qbittorrent.ptKeywords 白名单关键词的 PT 资源不限上传（分享率 -1、做种不限）；非 PT 公开种子需要你自己决定文件取舍——建议 paused=true 添加后用 files 查看文件列表，根据文件名与大小用 file_prio 剔除广告/推广文件（如 *.url、广告*.txt、*推广*.exe、www.* 等）仅保留需要内容，再 resume。保存位置默认在配置 defaultSavePath 下，可根据种子信息与内容用 subdirectory 指定子目录，或用 move 事后调整。配置 agent.qbittorrent.ownerOnly=true 时仅主人可用，权限由工具强制校验，调用失败时不要臆测原因。", map[string]interface{}{
+		"action":                      enumSchema("要执行的操作", []string{"add", "list", "status", "pause", "resume", "delete", "share_limit", "reannounce", "trackers", "add_tracker", "edit_tracker", "remove_tracker", "global_trackers", "files", "file_prio", "move", "set_category"}),
+		"urls":                        arrayStringSchema("add：磁力链接或种子 URL 列表，至少 1 个"),
+		"url":                         stringSchema("add：单个磁力链接或种子 URL（与 urls 二选一）"),
+		"hash":                        stringSchema("status/trackers/add_tracker/edit_tracker/remove_tracker/files/file_prio：任务 hash"),
+		"hashes":                      arrayStringSchema("pause/resume/delete/share_limit/reannounce/move/set_category：任务 hash 列表"),
+		"trackers":                    arrayStringSchema("add_tracker/remove_tracker/global_trackers：tracker URL 列表；单任务添加支持多条，全局设置用换行保存"),
+		"original_url":                stringSchema("edit_tracker：要替换的原 tracker URL"),
+		"new_url":                     stringSchema("edit_tracker：新的 tracker URL"),
+		"set":                         boolSchema("global_trackers：是否写入全局默认 tracker；false 仅查看"),
+		"enabled":                     boolSchema("global_trackers：是否启用新任务自动添加全局 tracker"),
+		"save_path":                   stringSchema("add/move：完整保存路径；不传则用 subdirectory 或默认目录"),
+		"subdirectory":                stringSchema("add/move：默认下载目录下的子目录，根据种子内容/信息决定"),
+		"category":                    stringSchema("add/move/set_category：任务分类"),
+		"tags":                        arrayStringSchema("add：可选任务标签"),
+		"paused":                      boolSchema("add：是否以暂停状态添加。非 PT 资源建议 true，先筛选文件再开始下载"),
+		"list_files":                  boolSchema("add：添加后是否直接返回文件列表，便于立即决定文件取舍"),
+		"rename":                      stringSchema("add：可选重命名任务"),
+		"exclude":                     arrayIntSchema("file_prio：不下载的文件索引列表"),
+		"include":                     arrayIntSchema("file_prio：仅下载的文件索引列表"),
+		"delete_files":                boolSchema("delete：是否同时删除本地文件，默认 false"),
+		"ratio_limit":                 numberSchema("share_limit：分享率限制（-1 不限，-2 用全局，正数为倍率），默认 -1"),
+		"seeding_time_limit":          numberSchema("share_limit：做种时间限制（分钟，-1 不限，-2 用全局）"),
+		"inactive_seeding_time_limit": numberSchema("share_limit：非活跃做种时间限制（分钟，-1 不限，-2 用全局；qBittorrent 4.6+ 必填）"),
+		"filter":                      enumSchema("list：按状态过滤", []string{"all", "downloading", "seeding", "completed", "paused", "active", "inactive", "stalled", "errored"}),
+		"limit":                       numberSchema("list/files：最多返回条数，list 默认 50，files 默认 200"),
+	}, []string{"action"})
 }
 
 func browserToolDefinitions() []openai.Tool {
