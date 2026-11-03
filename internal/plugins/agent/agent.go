@@ -270,7 +270,7 @@ func (p *plugin) runAgent(ctx *zero.Ctx, prompt string) (string, error) {
 		system += "\n可用 skills：" + strings.Join(skills, ", ")
 	}
 	if p.visionToolEnabled() && p.hasRequestImages(ctx) {
-		system += "\n当前用户消息或其引用消息包含图片，但主模型不会直接接收图片。你必须调用 analyze_images 工具，把用户对图片的要求作为 prompt 传入；收到识图结果后再结合对话回答。不要仅凭图片占位符猜测内容。"
+		system += "\n当前用户消息或其引用消息包含图片，但主模型不会直接接收图片画面。你必须调用 analyze_images 工具，把用户对图片的要求作为 prompt 传入；收到识图结果后再结合对话回答。不要仅凭图片占位符猜测内容。占位符中给出的原始链接已经可以直接访问，需要反查图片出处的，可以直接用该链接去搜索。"
 	}
 	system += p.requestIdentityContext(ctx)
 	taskGuardActive := p.taskGuardActive(prompt)
@@ -397,7 +397,7 @@ func (p *plugin) messagePartsRaw(msg message.Message) []openai.ChatMessagePart {
 			source := agentImageSource(segment)
 			if source != "" {
 				if p.visionToolEnabled() {
-					parts = append(parts, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: "[图片：请调用 analyze_images 工具识别]"})
+					parts = append(parts, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: visionImagePlaceholder(source)})
 					continue
 				}
 				parts = append(parts, openai.ChatMessagePart{
@@ -470,9 +470,7 @@ func multiContentHasImage(parts []openai.ChatMessagePart) bool {
 
 func agentImageSource(segment message.Segment) string {
 	for _, key := range []string{"url", "file"} {
-		source := strings.TrimSpace(segment.Data[key])
-		source = strings.ReplaceAll(source, "&amp;", "&")
-		source = html.UnescapeString(source)
+		source := normalizeAgentImageURL(segment.Data[key])
 		if strings.HasPrefix(source, "base64://") {
 			return "data:image/jpeg;base64," + strings.TrimPrefix(source, "base64://")
 		}
@@ -482,6 +480,33 @@ func agentImageSource(segment message.Segment) string {
 		}
 	}
 	return ""
+}
+
+// normalizeAgentImageURL 把 OneBot 上报里被转义的图片地址还原成可直接访问的链接，
+// 例如 &amp; 需要还原成 &，同时清掉多余的引号与首尾空白。
+func normalizeAgentImageURL(raw string) string {
+	source := strings.TrimSpace(raw)
+	if source == "" {
+		return ""
+	}
+	for i := 0; i < 4; i++ {
+		decoded := strings.ReplaceAll(source, "&amp;", "&")
+		decoded = html.UnescapeString(decoded)
+		if decoded == source {
+			break
+		}
+		source = decoded
+	}
+	return strings.TrimSpace(strings.Trim(source, "\"'"))
+}
+
+// visionImagePlaceholder 在独立识图模式下代替图片本体，
+// 并把还原后的原始链接一起给主模型，方便直接拿去反查出处或二次下载。
+func visionImagePlaceholder(source string) string {
+	if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
+		return fmt.Sprintf("[图片：请调用 analyze_images 工具识别；原始链接 %s]", source)
+	}
+	return "[图片：请调用 analyze_images 工具识别]"
 }
 
 func (p *plugin) taskGuardActive(prompt string) bool {

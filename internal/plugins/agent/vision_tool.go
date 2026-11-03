@@ -101,7 +101,23 @@ func (p *plugin) callAnalyzeImages(ctx *zero.Ctx, prompt string) (string, error)
 	if result == "" {
 		return "", fmt.Errorf("视觉模型返回了空结果")
 	}
-	return truncateRunes(result, p.cfg.Vision.MaxResultChars), nil
+	result = truncateRunes(result, p.cfg.Vision.MaxResultChars)
+	if sources := visionImagePublicSources(images); sources != "" {
+		result += "\n\n[图片来源（可直接访问）]\n" + sources
+	}
+	return result, nil
+}
+
+// visionImagePublicSources 把可直接访问的图片链接整理成列表，
+// 供主模型在需要反查出处或二次使用图片时直接取用，data URL 不入表。
+func visionImagePublicSources(images []string) string {
+	lines := make([]string, 0, len(images))
+	for i, source := range images {
+		if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
+			lines = append(lines, fmt.Sprintf("- 图片%d：%s", i+1, source))
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (p *plugin) prepareVisionImages(images []string) ([]string, error) {

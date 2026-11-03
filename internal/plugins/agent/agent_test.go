@@ -105,6 +105,57 @@ func TestAgentImageSourceNormalizesOneBotSources(t *testing.T) {
 	}
 }
 
+func TestAgentImageSourceUnescapesHTMLEntities(t *testing.T) {
+	segment := message.Segment{Type: "image", Data: map[string]string{
+		"url": "https://multimedia.nt.qq.com.cn/download?appid=1406&amp;fileid=abc&amp;spec=0&amp;rkey=xyz",
+	}}
+	want := "https://multimedia.nt.qq.com.cn/download?appid=1406&fileid=abc&spec=0&rkey=xyz"
+	if got := agentImageSource(segment); got != want {
+		t.Fatalf("unexpected normalized url: %q", got)
+	}
+
+	doubleEscaped := message.Segment{Type: "image", Data: map[string]string{
+		"url": "https://multimedia.nt.qq.com.cn/download?appid=1406&amp;amp;rkey=xyz",
+	}}
+	if got := agentImageSource(doubleEscaped); got != "https://multimedia.nt.qq.com.cn/download?appid=1406&rkey=xyz" {
+		t.Fatalf("unexpected double-escaped url: %q", got)
+	}
+}
+
+func TestAgentImageSourceParsesRawCQCodeWithSignedURL(t *testing.T) {
+	raw := `[CQ:image,file=17C0BA45F3A8ED90B0E9CAD8328953F0.jpg,subType=0,url=https://multimedia.nt.qq.com.cn/download?appid=1406&amp;fileid=abc&amp;spec=0&amp;rkey=xyz,file_size=516952]`
+	msg := message.ParseMessageFromString(raw)
+	if len(msg) != 1 || msg[0].Type != "image" {
+		t.Fatalf("unexpected parsed message: %#v", msg)
+	}
+	want := "https://multimedia.nt.qq.com.cn/download?appid=1406&fileid=abc&spec=0&rkey=xyz"
+	if got := agentImageSource(msg[0]); got != want {
+		t.Fatalf("unexpected source from raw CQ code: %q", got)
+	}
+}
+
+func TestVisionPlaceholderKeepsAccessibleImageURL(t *testing.T) {
+	p := &plugin{cfg: config.AgentConfig{Vision: config.VisionConfig{Enabled: true, Mode: "tool"}}}
+	msg := message.Message{
+		message.Text("帮我找找这张图的出处"),
+		{Type: "image", Data: map[string]string{"url": "https://multimedia.nt.qq.com.cn/download?appid=1406&amp;rkey=xyz"}},
+	}
+
+	parts := p.messageParts(msg)
+	if len(parts) != 2 {
+		t.Fatalf("expected text and placeholder, got %#v", parts)
+	}
+	if !strings.Contains(parts[1].Text, "analyze_images") {
+		t.Fatalf("placeholder must mention analyze_images: %q", parts[1].Text)
+	}
+	if !strings.Contains(parts[1].Text, "https://multimedia.nt.qq.com.cn/download?appid=1406&rkey=xyz") {
+		t.Fatalf("placeholder must carry the normalized image url: %q", parts[1].Text)
+	}
+	if strings.Contains(parts[1].Text, "&amp;") {
+		t.Fatalf("placeholder must not leak escaped ampersands: %q", parts[1].Text)
+	}
+}
+
 func TestVisionImageSourceLabelsDoNotExposeSignedURL(t *testing.T) {
 	labels := visionImageSourceLabels([]string{
 		"https://multimedia.nt.qq.com.cn/download?appid=1406&rkey=secret",

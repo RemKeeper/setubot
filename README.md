@@ -98,7 +98,7 @@ go build -o setubot .
 - `maxToolResultChars`：单条工具结果字符上限，默认 `60000`；避免大型 HTML、JSON 等进入模型上下文。
 - `historyBootstrap`：当当前 AI 会话没有上下文时，从 OneBot 后端读取最近聊天消息补充语境。默认启用，`minCount`/`maxCount` 会限制在 `4` 到 `7` 条，`maxChars` 默认 `6000`。执行“重置上下文”或切换模型后，下一次对话不会读取历史消息，以避免旧上下文被重新注入。该功能需要 OneBot 后端支持群聊/私聊历史接口。
 - `vision.enabled`：是否启用图片输入。开启后支持私聊图片、群聊 `@机器人 + 图片`，以及回复图文消息提问。
-- `vision.mode`：识图模式。`direct` 会把图片直接发送给 `agent.model`；`tool` 不会把图片发送给主模型，而是提供 `analyze_images` 工具，由独立视觉模型识别后把文字结果返回主模型。主模型不支持视觉时应使用 `tool`。
+- `vision.mode`：识图模式。`direct` 会把图片直接发送给 `agent.model`；`tool` 不会把图片发送给主模型，而是提供 `analyze_images` 工具，由独立视觉模型识别后把文字结果返回主模型。主模型不支持视觉时应使用 `tool`。两种模式下图片链接都会先反转义（&amp; 还原为 &）；`tool` 模式会把可直接访问的原始链接写进图片占位符，`analyze_images` 的返回结果末尾同样会附上图片来源链接，方便反查图片出处或再次使用同一张图。
 - `vision.baseURL`、`vision.apiKey`、`vision.model`：独立视觉工具使用的 OpenAI 兼容接口。留空时分别继承 `agent.baseURL`、`agent.apiKey`、`agent.model`。
 - `vision.systemPrompt`：视觉模型的系统提示词。
 - `vision.detail`：OpenAI 兼容视觉接口的图片细节级别，可选 `auto`、`low`、`high`，无效值按 `auto` 处理。

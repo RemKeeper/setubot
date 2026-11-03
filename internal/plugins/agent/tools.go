@@ -538,7 +538,7 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 		}, []string{"image_hash", "gid", "page_no"}),
 	}
 	if p.visionToolEnabled() {
-		tools = append(tools, functionTool("analyze_images", "使用独立视觉模型分析当前用户消息及其引用消息中携带的图片。主模型看不到图片本身，遇到图片理解、OCR、内容描述、对比或基于图片回答的问题时必须调用本工具。", map[string]interface{}{
+		tools = append(tools, functionTool("analyze_images", "使用独立视觉模型分析当前用户消息及其引用消息中携带的图片。主模型看不到图片本身，遇到图片理解、OCR、内容描述、对比或基于图片回答的问题时必须调用本工具。返回内容末尾会附上可直接访问的图片原始链接，需要反查图片出处或再次使用该图时可直接取用。", map[string]interface{}{
 			"prompt": stringSchema("交给视觉模型的具体识图要求，应包含用户原问题以及需要关注的文字、物体、人物、布局、差异等信息"),
 		}, []string{"prompt"}))
 	}
