@@ -156,6 +156,32 @@ func TestVisionPlaceholderKeepsAccessibleImageURL(t *testing.T) {
 	}
 }
 
+func TestMessagePartsWithPromptKeepsImagePlaceholder(t *testing.T) {
+	p := &plugin{cfg: config.AgentConfig{Vision: config.VisionConfig{Enabled: true, Mode: "tool"}}}
+	msg := message.Message{
+		message.Text("原话"),
+		{Type: "image", Data: map[string]string{"url": "https://multimedia.nt.qq.com.cn/download?appid=1406&amp;rkey=xyz"}},
+	}
+
+	parts := p.messagePartsWithPrompt(msg, "改写后的问题")
+	var texts []string
+	for _, part := range parts {
+		if part.Type == openai.ChatMessagePartTypeText {
+			texts = append(texts, part.Text)
+		}
+	}
+	if len(texts) != 2 {
+		t.Fatalf("expected rewritten prompt plus image placeholder, got %#v", texts)
+	}
+	if texts[0] != "改写后的问题" {
+		t.Fatalf("unexpected rewritten prompt: %q", texts[0])
+	}
+	if !strings.Contains(texts[1], "analyze_images") ||
+		!strings.Contains(texts[1], "https://multimedia.nt.qq.com.cn/download?appid=1406&rkey=xyz") {
+		t.Fatalf("image placeholder lost its url: %q", texts[1])
+	}
+}
+
 func TestVisionImageSourceLabelsDoNotExposeSignedURL(t *testing.T) {
 	labels := visionImageSourceLabels([]string{
 		"https://multimedia.nt.qq.com.cn/download?appid=1406&rkey=secret",

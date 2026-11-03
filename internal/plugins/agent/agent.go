@@ -340,6 +340,9 @@ func (p *plugin) userChatMessage(ctx *zero.Ctx, prompt string) chatMessage {
 		}
 	}
 	parts = append(parts, p.messagePartsWithPrompt(ctx.Event.Message, prompt)...)
+	if links := p.requestImageLinks(ctx); links != "" {
+		parts = append(parts, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: links})
+	}
 	if len(parts) == 0 {
 		return chatMessage{Role: openai.ChatMessageRoleUser, Content: prompt}
 	}
@@ -370,6 +373,11 @@ func (p *plugin) messagePartsWithPrompt(msg message.Message, prompt string) []op
 			if !textAdded {
 				result = append(result, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: prompt})
 				textAdded = true
+				continue
+			}
+			// 图片占位符同样是文本段，必须保留，否则主模型会丢掉图片线索。
+			if strings.HasPrefix(strings.TrimSpace(part.Text), "[图片") {
+				result = append(result, part)
 			}
 			continue
 		}
@@ -498,6 +506,25 @@ func normalizeAgentImageURL(raw string) string {
 		source = decoded
 	}
 	return strings.TrimSpace(strings.Trim(source, "\"'"))
+}
+
+// requestImageLinks 汇总本轮可访问的图片原始链接，
+// 独立识图模式由占位符逐张标注，直连模式则靠这段文本把链接补给主模型。
+func (p *plugin) requestImageLinks(ctx *zero.Ctx) string {
+	images := p.requestImageSources(ctx)
+	if len(images) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(images))
+	for i, source := range images {
+		if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
+			lines = append(lines, fmt.Sprintf("- 图片%d：%s", i+1, source))
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "本轮图片的可访问原始链接（可用于反查出处或再次下载）：\n" + strings.Join(lines, "\n")
 }
 
 // visionImagePlaceholder 在独立识图模式下代替图片本体，
