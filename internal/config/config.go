@@ -132,6 +132,10 @@ type EHReqConfig struct {
 	UserAgent          string `json:"userAgent"`
 	MaxBodyChars       int    `json:"maxBodyChars"`
 	ImageCacheMaxBytes int64  `json:"imageCacheMaxBytes"`
+	// GalleryCooldownMs 是 eh_send_gallery 相邻 EH 页面请求的最小间隔毫秒。
+	GalleryCooldownMs int `json:"galleryCooldownMs"`
+	// GalleryRetries 是 eh_send_gallery 单个请求的最大尝试次数。
+	GalleryRetries int `json:"galleryRetries"`
 }
 
 type QBittorrentConfig struct {
@@ -450,6 +454,12 @@ func (cfg AgentConfig) withDefaults() AgentConfig {
 	}
 	if cfg.EHReq.ImageCacheMaxBytes <= 0 {
 		cfg.EHReq.ImageCacheMaxBytes = 2 << 30
+	}
+	if cfg.EHReq.GalleryCooldownMs <= 0 {
+		cfg.EHReq.GalleryCooldownMs = 1100
+	}
+	if cfg.EHReq.GalleryRetries <= 0 {
+		cfg.EHReq.GalleryRetries = 3
 	}
 	if cfg.QBittorrent.Host == "" {
 		cfg.QBittorrent.Host = "127.0.0.1"

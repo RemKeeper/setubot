@@ -95,7 +95,9 @@
       "proxyEnv": "EHENTAI_PROXY",
       "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
       "maxBodyChars": 200000,
-      "imageCacheMaxBytes": 2147483648
+      "imageCacheMaxBytes": 2147483648,
+      "galleryCooldownMs": 1100,
+      "galleryRetries": 3
     },
     "qbittorrent": {
       "enabled": false,

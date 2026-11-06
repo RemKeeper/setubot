@@ -56,13 +56,19 @@ type ehImageCacheDownloadResult struct {
 	Error       string `json:"error,omitempty"`
 }
 
+// ehImageDownloadTask 描述一张待下载图片及其 Referer。
+type ehImageDownloadTask struct {
+	URL     string
+	Referer string
+}
+
 func (p *plugin) callEHDownloadImages(args map[string]interface{}) (string, error) {
 	images := cleanImageURLs(stringSliceArg(args, "images"), ehImageDownloadMax)
 	if len(images) == 0 {
 		return "", fmt.Errorf("图片地址不能为空")
 	}
 
-	cacheRoot, err := filepath.Abs(filepath.Join(filepath.Dir(p.cfg.MemoryDir), ehImageCacheDirName))
+	cacheRoot, err := p.ehImageCacheRoot()
 	if err != nil {
 		return "", err
 	}
@@ -130,11 +136,20 @@ func (p *plugin) callEHDownloadImages(args map[string]interface{}) (string, erro
 }
 
 func (p *plugin) downloadEHImageBatch(ctx context.Context, httpClient *http.Client, ehClient ehReqClient, cookie string, referer string, cacheDir string, images []string) []ehImageCacheDownloadResult {
-	results := make([]ehImageCacheDownloadResult, len(images))
+	tasks := make([]ehImageDownloadTask, 0, len(images))
+	for _, imageURL := range images {
+		tasks = append(tasks, ehImageDownloadTask{URL: imageURL, Referer: referer})
+	}
+	return p.downloadEHImageTasks(ctx, httpClient, ehClient, cookie, cacheDir, tasks)
+}
+
+// downloadEHImageTasks 并发下载任务列表，保持与输入相同的顺序返回结果。
+func (p *plugin) downloadEHImageTasks(ctx context.Context, httpClient *http.Client, ehClient ehReqClient, cookie string, cacheDir string, tasks []ehImageDownloadTask) []ehImageCacheDownloadResult {
+	results := make([]ehImageCacheDownloadResult, len(tasks))
 	jobs := make(chan int)
 	workerCount := ehImageDownloadJobs
-	if workerCount > len(images) {
-		workerCount = len(images)
+	if workerCount > len(tasks) {
+		workerCount = len(tasks)
 	}
 	if workerCount <= 0 {
 		return results
@@ -146,11 +161,12 @@ func (p *plugin) downloadEHImageBatch(ctx context.Context, httpClient *http.Clie
 		go func() {
 			defer wg.Done()
 			for index := range jobs {
-				results[index] = p.downloadEHImageWithRetry(ctx, httpClient, ehClient, cookie, referer, cacheDir, images[index])
+				task := tasks[index]
+				results[index] = p.downloadEHImageWithRetry(ctx, httpClient, ehClient, cookie, task.Referer, cacheDir, task.URL)
 			}
 		}()
 	}
-	for i := range images {
+	for i := range tasks {
 		jobs <- i
 	}
 	close(jobs)
@@ -275,6 +291,11 @@ func (p *plugin) downloadEHImage(ctx context.Context, httpClient *http.Client, e
 func cachedEHImageName(imageURL string) string {
 	sum := sha256.Sum256([]byte(imageURL))
 	return hex.EncodeToString(sum[:])[:32]
+}
+
+// ehImageCacheRoot 返回 EH 正文图片缓存的公共根目录。
+func (p *plugin) ehImageCacheRoot() (string, error) {
+	return filepath.Abs(filepath.Join(filepath.Dir(p.cfg.MemoryDir), ehImageCacheDirName))
 }
 
 func (p *plugin) ehImageCacheMaxBytes() int64 {

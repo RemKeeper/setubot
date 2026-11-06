@@ -1260,6 +1260,9 @@ func (p *plugin) callTool(ctx *zero.Ctx, name string, rawArgs string) string {
 	case "eh_download_images":
 		content, err := p.callEHDownloadImages(args)
 		return toolResult(content, err)
+	case "eh_send_gallery":
+		content, err := p.callEHSendGallery(ctx, args)
+		return toolResult(content, err)
 	case "eh_tag_load":
 		content, err := p.callEHTagLoad(args)
 		return toolResult(content, err)

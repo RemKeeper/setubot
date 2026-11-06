@@ -146,6 +146,19 @@ EH/EX 工具默认建议关闭，确认需要后再启用。
 - `ehReq.cookiePath`：Cookie 文件路径，默认 `.secrets/ehentai.cookies`。
 - `ehReq.proxyURL`：EH/EX 专用代理地址，例如 `http://127.0.0.1:7890`。
 - `ehReq.imageCacheMaxBytes`：EH 正文图片本地缓存总大小上限，默认 `2147483648`。图片按 `eh_image_cache/{gid}/{token}/` 两层目录缓存，超过总大小后优先清理最旧文件。
+- `ehReq.galleryCooldownMs`：`eh_send_gallery` 相邻 EH 页面请求的最小间隔毫秒，默认 `1100`。
+- `ehReq.galleryRetries`：`eh_send_gallery` 单个页面请求的最大尝试次数，默认 `3`。
+
+### `eh_send_gallery` 整本发送
+
+`eh_send_gallery` 是 EH/EX 整本发送的一站式工具：只要传入作品链接（例如 `https://exhentai.org/g/4022117/22c0b08fdc/`），它就会自动完成后续全部步骤，agent 不需要再手工串联 `eh_req_gallery`、`eh_req_image_page`、`eh_download_images` 或 `send_forward_images_batches`。
+
+- 自动翻页拉取作品正文缩略图入口，解析标题、总页数与每页图片页地址。
+- 解析正文图片页并下载到本地 `eh_image_cache/{gid}/{token}/` 缓存，已缓存图片直接复用。
+- 默认把每张图转成以 `agent.forwardImage.webpSurfacePath` 为表层的 WebP 隐藏图；`webpHidden=false` 时直接发原图。
+- 按 `batch_size`（默认 30，上限 30）切片，每一片作为一份独立的合并转发聊天记录发送。
+- 拉取正文自带冷却（`cooldown_ms`）与重试（`retries`），命中 EH 配额限制时自动停止后续拉取。
+- 全部批次处理完后一次性回传结构化结果：`ok`/`complete`、`batchTotal`/`batchSent`/`sentImages`、`batches[]`（每批的 `ok`、`count`、`firstPage`/`lastPage`、`messageId`、`attempts`、`elapsedMs`、`error`），以及 `failures[]` 里按页码列出的解析/下载失败明细。
 
 ## 小红书偏好修改
 

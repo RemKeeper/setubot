@@ -48,7 +48,23 @@ argument-hint: "关键词或标签；可选：站点 EH/EX、结果数量、正�
 - `eh_req_gallery`: 请求详情页 `/g/{gid}/{token}/`，支持缩略图分页 `page` 与 `show_comments`。
 - `eh_req_api`: 请求官方 API `/api.php`，支持 `gdata`、`tagsuggest` 等 JSON payload。
 - `eh_req_image_page`: 请求正文图片页 `/s/{imageHash}/{gid}-{pageNo}`，支持 `reload_key`。
-- `eh_download_images`: 并发下载多个正文图片直链到本地结构化缓存，全部成功后返回 `file:///` 本地图片地址，供 `send_forward_images` 或 `send_forward_images_batches` 发送；单图失败会自动重试。缓存按 `eh_image_cache/{gid}/{token}/` 两层目录保存，并按 `agent.ehReq.imageCacheMaxBytes` 总大小上限自动清理。EH/EX 获取到的正文图片不得直接把远端链接传给合并转发工具，必须先通过本工具落地缓存。
+- `eh_download_images`: 并发下载多个正文图片直链到本地结构化缓存，返回 `file:///` 本地图片地址，供 `send_forward_images` 或 `send_forward_images_batches` 发送；单图失败会自动重试。缓存按 `eh_image_cache/{gid}/{token}/` 两层目录保存，并按 `agent.ehReq.imageCacheMaxBytes` 总大小上限自动清理。EH/EX 获取到的正文图片不得直接把远端链接传给合并转发工具，必须先通过本工具落地缓存。
+- `eh_send_gallery`: **整本发送一站式工具**。只需传入作品链接（`gallery_url`，如 `https://exhentai.org/g/{gid}/{token}/`），工具内部自动完成「拉取详情页缩略图入口 → 解析全部正文图片页 → 下载缓存 → 转 WebP 隐藏图 → 每 30 张一份合并转发」，并自带请求冷却与重试。全部批次完成后一次性回传 `batchTotal`/`batchSent` 以及 `batches[]` 中每一批的发送结果，`failures[]` 列出跳过/失败的页码。用户给出作品链接并要求「发整本」时应**优先**调用该工具，不要再手工拼 `eh_req_gallery` + `eh_req_image_page` + `eh_download_images` + `send_forward_images_batches`。
+
+`eh_send_gallery` 参数：
+
+| 参数 | 必填 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `gallery_url` | 是 | 无 | 作品详情页链接，站点按域名自动识别 |
+| `site` | 否 | 自动 | 站点覆盖，`EX` 或 `EH` |
+| `batch_size` | 否 | `30` | 每份合并转发聊天记录最多张数，范围 1-30 |
+| `webpHidden` | 否 | `true` | 是否转成 WebP 隐藏图，需先配置 `agent.forwardImage.webpSurfacePath` |
+| `prefer_original` | 否 | `false` | 是否优先下载原图地址 |
+| `start_page` / `end_page` | 否 | `1` / 末尾 | 只发送指定页区间 |
+| `max_images` | 否 | 不限 | 最多处理多少张 |
+| `cooldown_ms` | 否 | `agent.ehReq.galleryCooldownMs` | 相邻 EH 页面请求的最小间隔毫秒 |
+| `retries` | 否 | `agent.ehReq.galleryRetries` | 单个页面请求最大尝试次数 |
+| `concurrency` | 否 | `2` | 并发解析图片页协程数，范围 1-6 |
 
 这些工具会从本地配置读取 Cookie 并注入请求头，只返回 `cookieLoaded` 布尔值，不会把 Cookie 内容返回给 agent。Cookie 来源按优先级读取：
 
@@ -342,6 +358,7 @@ EH/EX 请求可单独配置代理，不影响 OpenAI、Exa、浏览器等其它�
 
 ### 正文图片发送
 
+- 用户给出作品链接并要求「发整本 / 全部图片 / 分批发送」时，直接调用 `eh_send_gallery`，不要手工串联下面这些步骤。
 - 当需要向聊天发送漫画正文图片时，必须先调用 `eh_download_images` 下载已解析出的正文图片 URL，再调用 `send_forward_images` 或 `send_forward_images_batches` 发送返回的 `fileUrl` 列表。
 - EH/EX 获取到的正文图片不得直接把远端链接传给任何合并转发工具；即使用户要求旋转，也必须先用 `eh_download_images` 得到本地 `fileUrl`，再把本地 `fileUrl` 传给发送工具的 `rotate` 参数生成旋转缓存。
 - `eh_download_images` 的输入应使用已解析出的正文图片 URL 列表；若存在原图 URL 且用户要求优先原图，则优先传入 `originalImageUrl`，否则传入 `imageUrl`。
