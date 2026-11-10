@@ -10,6 +10,7 @@
 - 绘图：可选调用 OpenAI 兼容图像接口。
 - Exa 搜索：可选调用 Exa API 联网搜索。
 - EH/EX 查询：可选使用本地 Cookie、代理、标签翻译和图片缓存下载工具。
+- 高德出行：内置 `amap_route` / `amap_place` / `amap_info` / `amap_map_image` 四个原生工具，做路线规划与地区信息收集；`amap-mcp/` 另提供一份能力更全的独立 MCP 版本。
 
 ## 环境要求
 
@@ -291,3 +292,64 @@ python3 skills/xhs_dislike.py --keyword "不喜欢的关键词"
 - Cookie 是否通过环境变量或 `.secrets/ehentai.cookies` 配置。
 - 代理是否可用。
 - 图片缓存路径是否是绝对路径返回。
+
+## 高德出行工具（amap）
+
+主 Agent 是 Go 的 OpenAI 兼容 function calling，**直接内置了 4 个高德工具**，不需要跑 MCP 服务，也不需要 Python。
+
+### 配置
+
+```json
+"amap": {
+  "enabled": true,
+  "apiKey": "",
+  "apiKeyEnv": "AMAP_API_KEY",
+  "baseURL": "https://restapi.amap.com",
+  "timeout": 10,
+  "cacheTTL": 120
+}
+```
+
+`apiKey` 留空时会读环境变量 `AMAP_API_KEY`（推荐，避免把 Key 写进 `config.json`）：
+
+```bash
+export AMAP_API_KEY=你的Web服务Key
+```
+
+> `restapi.amap.com` 只接受**「Web服务」**类型的 Key。若返回 `infocode=10009 / USERKEY_PLAT_NOMATCH`，到 <https://console.amap.com/dev/key/app> 新建一个服务平台为「Web服务」的 Key 再替换即可。工具会把错误码翻译成中文可执行建议。
+
+### 工具清单
+
+`agent.amap.enabled=true` 时自动注册，共 4 个：
+
+| 工具 | 能力 | 关键参数 |
+| --- | --- | --- |
+| `amap_route` | 驾车 / 步行 / 骑行 / 公交地铁路线规划 | `mode`, `origin`, `destination`, `city`, `strategy`, `waypoints`, `depart_time`, `detail` |
+| `amap_place` | 地理编码、逆地理编码（含周边 POI/AOI）、POI 检索与详情、输入提示 | `action`（geocode/regeo/poi/poi_detail/tips）, `keywords`, `city`, `location`, `radius` |
+| `amap_info` | 天气（实时+预报）、行政区划 adcode、实时路况 | `action`（weather/district/traffic）, `city`, `road`/`rectangle`/`location` |
+| `amap_map_image` | 生成静态地图图片 URL（可带标记点/折线） | `location`, `zoom`, `markers`, `paths` |
+
+### 设计要点
+
+- **地名即坐标**：`origin`/`destination` 传「杭州西湖文化广场」或 `"120.16,30.28"` 都行，内部自动地理编码，纯坐标不额外发请求。
+- **歧义自查**：地名命中多个候选、或与 `city` 提示不符时，输出末尾附 `⚠` 提示并给出命中地址与候选数。真实踩过的坑：不带 `city` 时「杭州西湖文化广场」会被解析到**江西省南昌市西湖区**，驾车变成 531 km。
+- **路况退化**：`traffic/status/road` 只覆盖主要道路，查不到（`20003`）时自动退化为「定位该路 → 查 2km 圆形区域」，并在输出里说明。
+- **Token 友好**：默认 `detail=summary` 只给摘要；`steps` 模式最多渲染 12 步，超出提示省略；POI 最多 10 条。
+- **缓存**：相同参数的 GET 结果缓存 `cacheTTL` 秒（默认 120），agent 反复试错时不浪费配额。
+- **失败可读**：所有错误返回 `错误：... | infocode=... | 建议：...`，模型能自己纠正参数。
+
+### 验证
+
+```bash
+# 单元测试（httptest 模拟高德，不依赖外网）
+go test ./internal/plugins/agent/ -run TestAmap
+
+# 真实接口冒烟（需要 Key）
+AMAP_LIVE=1 AMAP_API_KEY=你的Key go test ./internal/plugins/agent/ -run TestAmapLive -v
+```
+
+### 可选：独立 MCP 版本
+
+`amap-mcp/` 目录下另有一份 Python 实现的 MCP 服务，能力更全（15 个工具，含批量测距、坐标转换、IP 定位、`raw_request` 逃生舱），适合挂到 Claude Desktop / Cursor / DSH 等支持 MCP 的客户端。主 Agent 不需要它，两者互不依赖；字段命名与设计约定保持一致。详见 [`amap-mcp/README.md`](amap-mcp/README.md)。
+
+

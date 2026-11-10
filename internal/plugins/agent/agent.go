@@ -48,6 +48,9 @@ type plugin struct {
 	configPath                 string
 	modelM                     sync.Mutex
 	modelPicks                 map[string]pendingModelSelection
+	amapHTTP                   *http.Client
+	amapCache                  map[string]amapCacheEntry
+	amapCacheM                 sync.Mutex
 }
 
 type conversationSession struct {
@@ -72,6 +75,7 @@ func Register(cfg config.AgentConfig, nickNames []string, superUsers []int64, co
 		historyBootstrapSuppressed: make(map[string]bool),
 		configPath:                 configPath,
 		modelPicks:                 make(map[string]pendingModelSelection),
+		amapCache:                  make(map[string]amapCacheEntry),
 	}
 	p.ehTags = newEHTagStore(ehTagRuntimeConfig{
 		Enabled:   cfg.EHTag.Enabled,
@@ -270,7 +274,7 @@ func (p *plugin) runAgent(ctx *zero.Ctx, prompt string) (string, error) {
 		system += "\n可用 skills：" + strings.Join(skills, ", ")
 	}
 	if p.visionToolEnabled() && p.hasRequestImages(ctx) {
-		system += "\n当前用户消息或其引用消息包含图片，但主模型不会直接接收图片画面。你必须调用 analyze_images 工具，把用户对图片的要求作为 prompt 传入；收到识图结果后再结合对话回答。不要仅凭图片占位符猜测内容。占位符中给出的原始链接已经可以直接访问，需要反查图片出处的，可以直接用该链接去搜索。"
+		system += "\n当前用户消息或其引用消息包含图片，但主模型不会直接接收图片画面。你必须调用 analyze_images 工具，把用户对图片的要求作为 prompt 传入；收到识图结果后再结合对话回答。不要仅凭图片占位符猜测内容。占位符中给出的原始链接已经可以直接访问，需要反查图片出处的，可以直接用该链接去搜索。若用户要找图片出处、作者、原图、高清图或番剧来源，必须先调用 read_skill 读取 REVERSE_IMAGE_SEARCH_SKILL.md，按其流程用浏览器以图搜图引擎检索；此时 analyze_images 只用于判断图片类型，禁止把识图描述当作搜索关键词。"
 	}
 	system += p.requestIdentityContext(ctx)
 	taskGuardActive := p.taskGuardActive(prompt)
@@ -1298,6 +1302,18 @@ func (p *plugin) callTool(ctx *zero.Ctx, name string, rawArgs string) string {
 		return toolResult(content, err)
 	case "analyze_images":
 		content, err := p.callAnalyzeImages(ctx, stringArg(args, "prompt"))
+		return toolResult(content, err)
+	case "amap_route":
+		content, err := p.callAmapRoute(context.Background(), args)
+		return toolResult(content, err)
+	case "amap_place":
+		content, err := p.callAmapPlace(context.Background(), args)
+		return toolResult(content, err)
+	case "amap_info":
+		content, err := p.callAmapInfo(context.Background(), args)
+		return toolResult(content, err)
+	case "amap_map_image":
+		content, err := p.callAmapMapImage(context.Background(), args)
 		return toolResult(content, err)
 	default:
 		return "未知工具：" + name

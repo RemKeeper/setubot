@@ -60,6 +60,19 @@ type AgentConfig struct {
 	EHTag               EHTagConfig            `json:"ehTag"`
 	EHReq               EHReqConfig            `json:"ehReq"`
 	QBittorrent         QBittorrentConfig      `json:"qbittorrent"`
+	Amap                AmapConfig             `json:"amap"`
+}
+
+// AmapConfig 是高德 Web 服务（restapi.amap.com）的配置。
+// APIKey 必须是高德控制台里「Web服务」类型的 Key。
+type AmapConfig struct {
+	Enabled   bool   `json:"enabled"`
+	APIKey    string `json:"apiKey"`
+	APIKeyEnv string `json:"apiKeyEnv"`
+	BaseURL   string `json:"baseURL"`
+	Timeout   int    `json:"timeout"`
+	CacheTTL  int    `json:"cacheTTL"`
+	OwnerOnly bool   `json:"ownerOnly"`
 }
 
 type HistoryBootstrapConfig struct {
@@ -460,6 +473,18 @@ func (cfg AgentConfig) withDefaults() AgentConfig {
 	}
 	if cfg.EHReq.GalleryRetries <= 0 {
 		cfg.EHReq.GalleryRetries = 3
+	}
+	if cfg.Amap.BaseURL == "" {
+		cfg.Amap.BaseURL = "https://restapi.amap.com"
+	}
+	if cfg.Amap.APIKeyEnv == "" {
+		cfg.Amap.APIKeyEnv = "AMAP_API_KEY"
+	}
+	if cfg.Amap.Timeout <= 0 {
+		cfg.Amap.Timeout = 10
+	}
+	if cfg.Amap.CacheTTL <= 0 {
+		cfg.Amap.CacheTTL = 120
 	}
 	if cfg.QBittorrent.Host == "" {
 		cfg.QBittorrent.Host = "127.0.0.1"

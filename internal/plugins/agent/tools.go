@@ -603,6 +603,60 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 		}, []string{"action"}))
 	}
 
+	if p.cfg.Amap.Enabled {
+		tools = append(tools,
+			functionTool("amap_route", "高德路线规划：驾车/步行/骑行/公交地铁，返回距离(km)、时长(分钟)、方案明细，可选逐步转向指引。起点终点既可以是中文地名也可以是 \"经度,纬度\"，内部自动地理编码。公交规划必须给 city（可自动逆地理推断）。地名命中多个候选或与 city 不符时会返回歧义提示，此时应先确认坐标再重试。", map[string]interface{}{
+				"mode":             enumSchema("出行方式，默认 driving", []string{"driving", "walking", "bicycling", "transit"}),
+				"origin":           stringSchema("起点，中文地名或 \"经度,纬度\"，例如 杭州西湖文化广场 或 120.16,30.28"),
+				"destination":      stringSchema("终点，中文地名或 \"经度,纬度\""),
+				"city":             stringSchema("出发城市名或 adcode，例如 杭州；公交规划必填（可自动推断），也能帮助地名消歧"),
+				"city_destination": stringSchema("目的城市，公交跨城时使用；同城可省略"),
+				"strategy":         numberSchema("策略：驾车 0-10（4 躲避拥堵、2 距离优先、10 躲避拥堵且不走高速）；公交 0-5（2 最少换乘、5 不乘地铁）"),
+				"waypoints":        arrayStringSchema("驾车途经点列表，最多 16 个"),
+				"depart_time":      stringSchema("公交出行时间，格式 \"2026-11-10 08:30\""),
+				"detail":           enumSchema("返回粒度：summary 只给摘要（默认，省 token），steps 附带逐步转向指引", []string{"summary", "steps"}),
+				"max_paths":        numberSchema("返回方案数量，1-3，默认 2"),
+			}, []string{"origin", "destination"}),
+			functionTool("amap_place", "高德地点工具：地址转坐标(geocode)、坐标转地址(regeo，含周边 POI/AOI)、关键词或分类检索 POI(poi，给 location 即周边搜索并带距离)、POI 详情(poi_detail)、口语化地名补全(tips)。找地点、确认坐标、查营业时间/评分/电话时用本工具。", map[string]interface{}{
+				"action":    enumSchema("操作类型", []string{"geocode", "regeo", "poi", "poi_detail", "tips"}),
+				"address":   stringSchema("geocode：结构化地址，尽量带省市，例如 杭州市西湖区文三路90号"),
+				"keywords":  stringSchema("poi/tips：关键词，例如 咖啡、充电桩、西湖；geocode 时作为 address 的别名"),
+				"types":     stringSchema("poi：高德分类码，例如 050500（餐饮服务）、010000（汽车服务）"),
+				"city":      stringSchema("城市名或 adcode，例如 杭州；用于地名消歧与限定搜索范围"),
+				"location":  stringSchema("regeo/poi/tips：\"经度,纬度\"；poi 传了它就走周边搜索"),
+				"radius":    numberSchema("regeo 默认 1000；poi 周边搜索半径（米），默认 3000，最大 50000"),
+				"sortrule":  enumSchema("poi 周边搜索排序", []string{"distance", "weight"}),
+				"page":      numberSchema("poi：页码，从 1 开始"),
+				"page_size": numberSchema("poi：每页条数，1-25，默认 10"),
+				"poi_id":    stringSchema("poi_detail：来自 poi 结果的 POI ID"),
+			}, []string{"action"}),
+			functionTool("amap_info", "高德地区信息：天气预报(weather)、行政区划 adcode 与下级区划(district)、实时路况(traffic)。路况支持按道路名、矩形区域或圆形区域查询；道路不在高德路况覆盖范围时会自动退化为该路所在 2km 圆形区域。", map[string]interface{}{
+				"action":      enumSchema("操作类型", []string{"weather", "district", "traffic"}),
+				"city":        stringSchema("weather/district/traffic：城市名或 adcode，例如 杭州 或 330100"),
+				"keywords":    stringSchema("district：行政区名称或 adcode，留空返回全国"),
+				"forecast":    boolSchema("weather：是否返回未来 3-4 天预报，默认 true"),
+				"subdistrict": numberSchema("district：下级层级 0-3，默认 1"),
+				"kind":        enumSchema("traffic：查询方式", []string{"road", "circle", "rectangle"}),
+				"road":        stringSchema("traffic kind=road：道路名，例如 北四环"),
+				"rectangle":   stringSchema("traffic kind=rectangle：\"左下经度,纬度;右上经度,纬度\"，跨度建议 ≤0.05°"),
+				"location":    stringSchema("traffic kind=circle：中心点 \"经度,纬度\""),
+				"radius":      numberSchema("traffic kind=circle：半径（米），0-5000，默认 1000"),
+				"level":       numberSchema("traffic：道路等级 1-6，越大越详细，默认 5"),
+			}, []string{"action"}),
+			functionTool("amap_map_image", "生成高德静态地图图片 URL，可带标记点和折线，适合把路线或地点直接发给用户看。注意：返回的 URL 内含 API Key，只发给可信对象。", map[string]interface{}{
+				"location":     stringSchema("地图中心点 \"经度,纬度\"，也接受中文地名"),
+				"zoom":         numberSchema("缩放级别 1-17，默认 15"),
+				"width":        numberSchema("宽度像素，最大 1024，默认 600"),
+				"height":       numberSchema("高度像素，最大 1024，默认 400"),
+				"scale":        numberSchema("清晰度 1 或 2，默认 2"),
+				"markers":      arrayStringSchema("标记点列表，格式 \"mid,0xFF0000,A:经度,纬度\" 或简写 \"经度,纬度\""),
+				"paths":        arrayStringSchema("折线列表，格式 \"weight,color,t,alpha:lng1,lat1;lng2,lat2\""),
+				"show_traffic": boolSchema("是否叠加实时路况图层"),
+				"city":         stringSchema("可选城市名，帮助解析中文地名"),
+			}, []string{}),
+		)
+	}
+
 	if !p.cfg.Browser.Enabled {
 		return tools
 	}

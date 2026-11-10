@@ -111,6 +111,15 @@
       "defaultShareRatio": 1.0,
       "ptKeywords": [],
       "timeout": 15
+    },
+    "amap": {
+      "enabled": false,
+      "apiKey": "替换为高德「Web服务」类型的 Key；也可改用环境变量 AMAP_API_KEY",
+      "apiKeyEnv": "AMAP_API_KEY",
+      "baseURL": "https://restapi.amap.com",
+      "timeout": 10,
+      "cacheTTL": 120,
+      "ownerOnly": false
     }
   }
 }
