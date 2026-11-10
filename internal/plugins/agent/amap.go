@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	zero "github.com/wdvxdr1123/ZeroBot"
 )
 
 // 高德 Web 服务工具：路线规划、地点检索、地区信息与静态地图。
@@ -88,6 +90,18 @@ func amapHint(infocode string) string {
 		return hint
 	}
 	return "参考高德错误码文档，或到 https://console.amap.com/dev/key/app 检查 Key 配置。"
+}
+
+// amapGuard 统一入口校验：启用开关 + ownerOnly 鉴权。
+// 鉴权在工具层完成，不依赖模型判断。
+func (p *plugin) amapGuard(zc *zero.Ctx) error {
+	if !p.cfg.Amap.Enabled {
+		return fmt.Errorf("高德工具未启用，请在 agent.amap.enabled 中开启")
+	}
+	if p.cfg.Amap.OwnerOnly && (zc == nil || !p.isSuperUser(zc.Event.UserID)) {
+		return fmt.Errorf("高德工具仅主人可用")
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------- 客户端

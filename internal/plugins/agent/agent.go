@@ -1304,15 +1304,27 @@ func (p *plugin) callTool(ctx *zero.Ctx, name string, rawArgs string) string {
 		content, err := p.callAnalyzeImages(ctx, stringArg(args, "prompt"))
 		return toolResult(content, err)
 	case "amap_route":
+		if err := p.amapGuard(ctx); err != nil {
+			return toolResult("", err)
+		}
 		content, err := p.callAmapRoute(context.Background(), args)
 		return toolResult(content, err)
 	case "amap_place":
+		if err := p.amapGuard(ctx); err != nil {
+			return toolResult("", err)
+		}
 		content, err := p.callAmapPlace(context.Background(), args)
 		return toolResult(content, err)
 	case "amap_info":
+		if err := p.amapGuard(ctx); err != nil {
+			return toolResult("", err)
+		}
 		content, err := p.callAmapInfo(context.Background(), args)
 		return toolResult(content, err)
 	case "amap_map_image":
+		if err := p.amapGuard(ctx); err != nil {
+			return toolResult("", err)
+		}
 		content, err := p.callAmapMapImage(context.Background(), args)
 		return toolResult(content, err)
 	default:

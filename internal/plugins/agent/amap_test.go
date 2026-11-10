@@ -650,3 +650,26 @@ func TestAmapToolsRegisteredOnlyWhenEnabled(t *testing.T) {
 		}
 	}
 }
+
+func TestAmapGuard(t *testing.T) {
+	// 未启用
+	disabled := &plugin{cfg: config.AgentConfig{Amap: config.AmapConfig{Enabled: false}}}
+	if err := disabled.amapGuard(nil); err == nil || !strings.Contains(err.Error(), "未启用") {
+		t.Fatalf("未启用时应拒绝调用，实际: %v", err)
+	}
+
+	// 启用但 ownerOnly，无 ctx（等价于非主人）
+	ownerOnly := &plugin{
+		cfg:        config.AgentConfig{Amap: config.AmapConfig{Enabled: true, OwnerOnly: true}},
+		superUsers: []int64{10001},
+	}
+	if err := ownerOnly.amapGuard(nil); err == nil || !strings.Contains(err.Error(), "仅主人") {
+		t.Fatalf("ownerOnly 且无 ctx 时应拒绝，实际: %v", err)
+	}
+
+	// 启用且不限制主人
+	open := &plugin{cfg: config.AgentConfig{Amap: config.AmapConfig{Enabled: true}}}
+	if err := open.amapGuard(nil); err != nil {
+		t.Fatalf("启用且非 ownerOnly 时应放行，实际: %v", err)
+	}
+}
