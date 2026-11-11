@@ -1430,20 +1430,113 @@ func amapRenderTraffic(payload map[string]interface{}, kind string, note string)
 }
 
 // ---------------------------------------------------------------- 静态地图
+//
+// 高德静态图对参数格式极其挑剔（实测结论）：
+//   - location / zoom / size / scale / traffic 稳定可用；
+//   - markers 必须写成 "style,color,label:lng,lat"，label 不可省略，否则 20003；
+//   - paths 在该 Key 上始终返回 20003（官方文档示例也一样），因此不再对外暴露；
+//   - 多个标记点用 ";" 分隔。
+//
+// 为避免模型自己拼错格式，工具只接受结构化输入（center/points），
+// 由这里统一生成合法 URL。
+
+// amapStaticMapPoint 是一个标记点。
+type amapStaticMapPoint struct {
+	Lng   float64
+	Lat   float64
+	Label string
+	Color string
+}
+
+// amapParseStaticMapPoints 解析结构化点列表：支持 "名称:经度,纬度"、"经度,纬度" 两种写法。
+func amapParseStaticMapPoints(raw []string) ([]amapStaticMapPoint, error) {
+	points := make([]amapStaticMapPoint, 0, len(raw))
+	for _, item := range raw {
+		text := strings.TrimSpace(item)
+		if text == "" {
+			continue
+		}
+		label := ""
+		coordText := text
+		// 形如 "起点:113.40,23.12"
+		if index := strings.LastIndex(text, ":"); index >= 0 {
+			candidate := strings.TrimSpace(text[:index])
+			rest := strings.TrimSpace(text[index+1:])
+			if _, _, ok := amapParseLngLat(rest); ok {
+				label = candidate
+				coordText = rest
+			}
+		}
+		lng, lat, ok := amapParseLngLat(coordText)
+		if !ok {
+			return nil, fmt.Errorf("标记点 %q 格式非法，应为 \"名称:经度,纬度\" 或 \"经度,纬度\"", item)
+		}
+		points = append(points, amapStaticMapPoint{Lng: lng, Lat: lat, Label: label})
+	}
+	return points, nil
+}
+
+// amapBuildMarkers 生成高德要求的 markers 串。label 必填，缺失时用序号补上。
+func amapBuildMarkers(points []amapStaticMapPoint) string {
+	parts := make([]string, 0, len(points))
+	for index, point := range points {
+		label := strings.TrimSpace(point.Label)
+		if label == "" {
+			label = strconv.Itoa(index + 1)
+		}
+		// 高德 label 只稳定支持短文本，超长截断避免整串失败
+		label = truncate(label, 4)
+		color := point.Color
+		if color == "" {
+			color = "0xFF0055"
+		}
+		parts = append(parts, fmt.Sprintf("mid,%s,%s:%.6f,%.6f", color, label, point.Lng, point.Lat))
+	}
+	return strings.Join(parts, ";")
+}
 
 func (p *plugin) callAmapMapImage(ctx context.Context, args map[string]interface{}) (string, error) {
 	key, err := p.amapKey()
 	if err != nil {
 		return "", err
 	}
+	city := stringArg(args, "city")
 	values := url.Values{}
-	if location := stringArg(args, "location"); location != "" {
-		resolved, err := p.amapResolve(ctx, location, stringArg(args, "city"), "location")
+
+	// 中心点：显式给 center 就用它，否则用第一个标记点兜底（高德要求必须有 location）
+	centerText := stringArg(args, "center")
+	if centerText == "" {
+		centerText = stringArg(args, "location")
+	}
+
+	rawPoints := stringSliceArg(args, "points")
+	if len(rawPoints) == 0 {
+		rawPoints = stringSliceArg(args, "markers") // 兼容旧参数名
+	}
+	points, err := amapParseStaticMapPoints(rawPoints)
+	if err != nil {
+		return "", err
+	}
+
+	if centerText != "" {
+		resolved, err := p.amapResolve(ctx, centerText, city, "center")
 		if err != nil {
 			return "", err
 		}
 		values.Set("location", resolved.Location)
+	} else if len(points) > 0 {
+		// 用标记点平均位置作中心，避免模型还要自己算
+		var sumLng, sumLat float64
+		for _, point := range points {
+			sumLng += point.Lng
+			sumLat += point.Lat
+		}
+		count := float64(len(points))
+		values.Set("location", fmt.Sprintf("%.6f,%.6f", sumLng/count, sumLat/count))
+	} else {
+		return "", fmt.Errorf("需要 center（地图中心点）或 points（至少一个标记点）")
 	}
+
 	values.Set("zoom", strconv.Itoa(clamp(numberArg(args, "zoom", 15), 1, 17)))
 	width := clamp(numberArg(args, "width", 600), 1, 1024)
 	height := clamp(numberArg(args, "height", 400), 1, 1024)
@@ -1452,18 +1545,27 @@ func (p *plugin) callAmapMapImage(ctx context.Context, args map[string]interface
 	if boolArg(args, "show_traffic", false) {
 		values.Set("traffic", "1")
 	}
-	if markers := stringSliceArg(args, "markers"); len(markers) > 0 {
-		values.Set("markers", strings.Join(markers, "|"))
-	}
-	if paths := stringSliceArg(args, "paths"); len(paths) > 0 {
-		values.Set("paths", strings.Join(paths, "|"))
-	}
-	if values.Get("location") == "" && values.Get("markers") == "" && values.Get("paths") == "" {
-		return "", fmt.Errorf("location / markers / paths 至少提供一个")
+	if len(points) > 0 {
+		values.Set("markers", amapBuildMarkers(points))
 	}
 	values.Set("key", key)
 
 	imageURL := p.amapBaseURL() + "/v3/staticmap?" + values.Encode()
-	return fmt.Sprintf("静态地图已生成（%dx%d，缩放 %s）：\n%s\n\n注意：URL 内含 API Key，只发给可信对象。",
-		width, height, values.Get("zoom"), imageURL), nil
+
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("静态地图已生成（%dx%d，缩放 %s，中心 %s）\n", width, height, values.Get("zoom"), values.Get("location")))
+	builder.WriteString(imageURL + "\n")
+	if len(points) > 0 {
+		builder.WriteString(fmt.Sprintf("\n标记点 %d 个：\n", len(points)))
+		for index, point := range points {
+			label := point.Label
+			if label == "" {
+				label = strconv.Itoa(index + 1)
+			}
+			builder.WriteString(fmt.Sprintf("  %s → %.6f,%.6f\n", label, point.Lng, point.Lat))
+		}
+		builder.WriteString("\n注意：高德静态图的 markers 图层在部分 Key 上会被静默忽略，若打开后看不到标记点，请以坐标文字为准。\n")
+	}
+	builder.WriteString("注意：URL 内含 API Key，只发给可信对象。高德静态图不支持折线（paths），需要连线请用文字描述路线。")
+	return builder.String(), nil
 }

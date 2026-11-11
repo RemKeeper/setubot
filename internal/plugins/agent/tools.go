@@ -643,14 +643,13 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 				"radius":      numberSchema("traffic kind=circle：半径（米），0-5000，默认 1000"),
 				"level":       numberSchema("traffic：道路等级 1-6，越大越详细，默认 5"),
 			}, []string{"action"}),
-			functionTool("amap_map_image", "生成高德静态地图图片 URL，可带标记点和折线，适合把路线或地点直接发给用户看。注意：返回的 URL 内含 API Key，只发给可信对象。", map[string]interface{}{
-				"location":     stringSchema("地图中心点 \"经度,纬度\"，也接受中文地名"),
-				"zoom":         numberSchema("缩放级别 1-17，默认 15"),
+			functionTool("amap_map_image", "生成高德静态地图图片 URL，把地点或起终点方位直接发给用户看。只需传地名或坐标，格式由工具内部拼装，不要自己拼 URL。注意：返回的 URL 内含 API Key，只发给可信对象。高德静态图不支持折线，两地连线请用文字描述。", map[string]interface{}{
+				"center":       stringSchema("地图中心点，中文地名或 \"经度,纬度\"。不传则自动取所有标记点的中心"),
+				"points":       arrayStringSchema("标记点列表，每项格式 \"名称:经度,纬度\" 或 \"经度,纬度\"，例如 \"起点:113.402944,23.122033\"。名称会作为地图上的标签"),
+				"zoom":         numberSchema("缩放级别 1-17，默认 15；两地相距较远时用 9-11"),
 				"width":        numberSchema("宽度像素，最大 1024，默认 600"),
 				"height":       numberSchema("高度像素，最大 1024，默认 400"),
 				"scale":        numberSchema("清晰度 1 或 2，默认 2"),
-				"markers":      arrayStringSchema("标记点列表，格式 \"mid,0xFF0000,A:经度,纬度\" 或简写 \"经度,纬度\""),
-				"paths":        arrayStringSchema("折线列表，格式 \"weight,color,t,alpha:lng1,lat1;lng2,lat2\""),
 				"show_traffic": boolSchema("是否叠加实时路况图层"),
 				"city":         stringSchema("可选城市名，帮助解析中文地名"),
 			}, []string{}),

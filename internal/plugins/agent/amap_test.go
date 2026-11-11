@@ -617,9 +617,9 @@ func TestAmapMapImageURL(t *testing.T) {
 	})
 
 	out, err := p.callAmapMapImage(context.Background(), map[string]interface{}{
-		"location": "120.16,30.28",
-		"width":    float64(400),
-		"height":   float64(300),
+		"center": "120.16,30.28",
+		"width":  float64(400),
+		"height": float64(300),
 	})
 	if err != nil {
 		t.Fatalf("生成静态地图失败: %v", err)
@@ -628,6 +628,82 @@ func TestAmapMapImageURL(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("输出缺少 %q:\n%s", want, out)
 		}
+	}
+}
+
+// 高德静态图 markers 的 label 是必填的，缺失会 20003；这里确认工具自己补上。
+func TestAmapBuildMarkersAlwaysHasLabel(t *testing.T) {
+	points := []amapStaticMapPoint{
+		{Lng: 113.402944, Lat: 23.122033, Label: "起点"},
+		{Lng: 113.532737, Lat: 22.795537}, // 无 label
+	}
+	got := amapBuildMarkers(points)
+	if !strings.Contains(got, "mid,0xFF0055,起点:113.402944,23.122033") {
+		t.Fatalf("首个标记点格式异常: %q", got)
+	}
+	if !strings.Contains(got, "mid,0xFF0055,2:113.532737,22.795537") {
+		t.Fatalf("缺 label 时应补序号: %q", got)
+	}
+	if !strings.Contains(got, ";") {
+		t.Fatalf("多个标记点应用 ; 分隔: %q", got)
+	}
+}
+
+func TestAmapParseStaticMapPoints(t *testing.T) {
+	points, err := amapParseStaticMapPoints([]string{
+		"起点:113.402944,23.122033",
+		"113.532737,22.795537",
+		"终点：113.5,22.8", // 全角冒号不支持，应按纯坐标解析失败
+	})
+	if err == nil {
+		t.Fatalf("全角冒号应解析失败，实际得到 %d 个点", len(points))
+	}
+
+	points, err = amapParseStaticMapPoints([]string{"起点:113.402944,23.122033", "113.532737,22.795537"})
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if len(points) != 2 {
+		t.Fatalf("点数量异常: %d", len(points))
+	}
+	if points[0].Label != "起点" || points[0].Lng != 113.402944 {
+		t.Fatalf("首点解析异常: %#v", points[0])
+	}
+	if points[1].Label != "" || points[1].Lat != 22.795537 {
+		t.Fatalf("次点解析异常: %#v", points[1])
+	}
+}
+
+// 只给标记点、不给中心点时，应自动取平均位置，而不是报错或漏 location。
+func TestAmapMapImageDerivesCenterFromPoints(t *testing.T) {
+	p, _ := newAmapTestPlugin(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("纯坐标不应发起请求: %s", r.URL.Path)
+	})
+
+	out, err := p.callAmapMapImage(context.Background(), map[string]interface{}{
+		"points": []interface{}{"起点:113.402944,23.122033", "终点:113.532737,22.795537"},
+	})
+	if err != nil {
+		t.Fatalf("生成静态地图失败: %v", err)
+	}
+	// 平均值 (113.4678405, 22.958785)
+	if !strings.Contains(out, "location=113.467") {
+		t.Fatalf("未自动计算中心点:\n%s", out)
+	}
+	if !strings.Contains(out, "markers=") {
+		t.Fatalf("缺少 markers 参数:\n%s", out)
+	}
+	if strings.Contains(out, "paths=") {
+		t.Fatalf("paths 已确认不可用，不应再输出:\n%s", out)
+	}
+}
+
+func TestAmapMapImageRequiresCenterOrPoints(t *testing.T) {
+	p, _ := newAmapTestPlugin(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("不应发起请求")
+	})
+	if _, err := p.callAmapMapImage(context.Background(), map[string]interface{}{}); err == nil {
+		t.Fatal("缺少 center 与 points 时应报错")
 	}
 }
 
