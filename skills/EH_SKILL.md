@@ -188,27 +188,6 @@ EH/EX 请求可单独配置代理，不影响 OpenAI、Exa、浏览器等其它�
 - `eh_tag_resolve_keyword`: 将中文标签解析为 E-Hentai 搜索表达式，例如 `中文` -> `language:chinese`。
 - `eh_tag_translate`: 将 `{namespace, key}` 标签翻译为中文展示信息。
 
-### 标签屏蔽（agent 不可见）
-
-`agent.ehTag.blockedTags` 配置的标签不会返回给 agent，命中后直接从结果中剔除：
-
-| 写法 | 含义 | 示例 |
-| --- | --- | --- |
-| `namespace:key` | 精确匹配 | `female:lolicon` |
-| `key` | 匹配任意命名空间下的同名 key | `lolicon` |
-| `namespace:*` | 屏蔽整个命名空间 | `female:*` |
-
-匹配不区分大小写，`_` 与空格等价（`big_breasts` 与 `big breasts` 视为同一标签）。
-
-生效范围：
-
-- `eh_req_search` / `eh_req_gallery` 的 `format=markdown` 输出
-- `eh_tag_search` 的 `matches`
-- `eh_tag_resolve_keyword` 的 `candidates` 与 `selected`；若 `resolvedKeyword` 命中屏蔽，会回退为原始关键词并置 `source=rawKeyword`
-- `eh_tag_translate` 的 `tags`
-
-注意：屏蔽只影响返回给 agent 的内容，不改变实际请求参数。若 agent 自己拼出被屏蔽的搜索表达式，仍会正常请求。
-
 推荐调用规则：
 
 1. 需要中文标签映射时，先调用 `eh_tag_resolve_keyword({ keyword, auto_select: true })`。
