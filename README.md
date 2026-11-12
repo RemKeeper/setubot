@@ -111,6 +111,7 @@ go build -o setubot .
 - `forwardImage.webpSurfacePath`：合并转发隐藏图（`webpHidden=true`）使用的表层图片路径，作为第一帧短暂显示。输出尺寸由隐藏图片决定。
 - `forwardImage.webpCacheMaxBytes`：隐藏图 WebP 缓存目录（`forward_image_webp_cache`）总大小上限，默认 `536870912`。
 - `debug`：是否记录请求体到 `debugLogPath`。公开部署建议关闭。
+- `debugTrace`：调试跟踪页面配置。`enabled` 未设置时跟随 `debug`；开启后会在 `addr`（默认 `0.0.0.0:18080`）启动内网 HTTP 页面，实时展示每轮请求的模型思考过程、模型请求/响应、工具调用参数与返回、以及组合消息发送到 QQ 的完整结构。`maxEvents` 控制内存中保留的事件条数（默认 2000），`maxBodyChars` 控制单条事件正文的字符上限（默认 20000，超出会截断）。页面无鉴权，只建议在可信内网开启，公开部署请保持关闭。
 
 ### `draw`
 
@@ -258,6 +259,18 @@ python3 skills/xhs_setu.py --count 1 --scroll 2
 python3 skills/xhs_setu.py --keyword "关键词" --count 1 --scroll 3
 python3 skills/xhs_dislike.py --keyword "不喜欢的关键词"
 ```
+
+## 调试跟踪页面
+
+`agent.debugTrace.enabled=true`（或 `agent.debug=true` 且未显式关闭 `debugTrace`）时，进程启动后会同时监听 `agent.debugTrace.addr`（默认 `0.0.0.0:18080`），浏览器打开 `http://<内网IP>:18080/` 即可查看实时跟踪：
+
+- **模型思考过程**：每轮模型响应里的 `reasoning_content` 与正文。
+- **模型请求/响应**：请求消息列表、工具定义数量、温度、耗时、token 用量、结束原因。
+- **工具调用**：工具名、调用 ID、完整参数 JSON、工具返回内容与耗时。
+- **QQ 发送**：每次 `ctx.Send` 的消息类型（思考提示/最终回复/合并转发/小红书图片等）、目标会话、消息 ID、段类型统计与完整消息结构 JSON。
+- **子流程**：浏览器子代理、`analyze_images` 视觉模型、上下文摘要与记忆抽取的模型调用同样会记录。
+
+页面按「一轮请求」分组，支持按事件类型过滤、关键词搜索、折叠分组、清空事件。事件保存在内存环形缓冲中（`maxEvents`，默认 2000 条），单条正文超过 `maxBodyChars`（默认 20000 字符）会截断；base64 图片正文不会写入事件。页面无鉴权，只建议在可信内网开启。
 
 ## 敏感文件与开源注意事项
 

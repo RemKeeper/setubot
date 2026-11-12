@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SetuBot Agent 调试跟踪</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-2: #1e222b;
+    --border: #2a2f3a;
+    --text: #e6e8ee;
+    --muted: #8b93a7;
+    --accent: #7aa2f7;
+    --green: #7bd88f;
+    --yellow: #e0af68;
+    --red: #f7768e;
+    --purple: #bb9af7;
+    --cyan: #7dcfff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.55 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 10;
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+    padding: 10px 16px;
+    background: rgba(15,17,21,.94);
+    border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(6px);
+  }
+  header h1 { font-size: 15px; margin: 0 12px 0 0; font-weight: 600; }
+  header .stat { color: var(--muted); font-size: 12px; }
+  header .spacer { flex: 1; }
+  button, select, input[type=text] {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 5px 10px; font-size: 12px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  input[type=text] { cursor: text; min-width: 180px; }
+  main { padding: 14px 16px 60px; }
+  .turn {
+    border: 1px solid var(--border); border-radius: 10px;
+    background: var(--panel); margin-bottom: 14px; overflow: hidden;
+  }
+  .turn-head {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    padding: 9px 12px; background: var(--panel-2);
+    border-bottom: 1px solid var(--border); cursor: pointer;
+  }
+  .turn-head .id { font-family: ui-monospace, Consolas, monospace; color: var(--accent); }
+  .turn-head .meta { color: var(--muted); font-size: 12px; }
+  .turn-head .badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+  .turn-body { padding: 6px 10px 10px; }
+  .turn.collapsed .turn-body { display: none; }
+  .ev { border-left: 3px solid var(--border); margin: 8px 0; padding: 6px 10px; background: var(--panel-2); border-radius: 0 8px 8px 0; }
+  .ev.turn_start { border-color: var(--accent); }
+  .ev.model_request { border-color: var(--cyan); }
+  .ev.model_response { border-color: var(--purple); }
+  .ev.tool_call { border-color: var(--yellow); }
+  .ev.qq_send { border-color: var(--green); }
+  .ev.turn_end { border-color: var(--muted); }
+  .ev.note { border-color: var(--border); }
+  .ev-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+  .ev-title { font-weight: 600; }
+  .ev-time { color: var(--muted); font-size: 11px; font-family: ui-monospace, Consolas, monospace; }
+  .ev-dur { color: var(--muted); font-size: 11px; }
+  .ev-err { color: var(--red); }
+  .fields { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; }
+  .field { font-size: 12px; color: var(--muted); }
+  .field b { color: var(--text); font-weight: 500; }
+  .block { margin-top: 6px; }
+  .block-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  pre {
+    margin: 3px 0 0; padding: 8px 10px; max-height: 320px; overflow: auto;
+    background: #0b0d11; border: 1px solid var(--border); border-radius: 6px;
+    font: 12px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-word;
+  }
+  pre.reasoning { color: var(--purple); }
+  pre.content { color: var(--text); }
+  pre.body { color: var(--cyan); }
+  pre.result { color: var(--green); }
+  .empty { color: var(--muted); text-align: center; padding: 40px 0; }
+  .pill { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 4px; background: #262b36; color: var(--muted); }
+  .live { width: 8px; height: 8px; border-radius: 50%; background: var(--green); display: inline-block; }
+  .live.off { background: var(--red); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Agent 调试跟踪</h1>
+  <span class="stat"><span id="live" class="live off"></span> <span id="status">连接中…</span></span>
+  <span class="stat" id="stats"></span>
+  <span class="spacer"></span>
+  <input type="text" id="filter" placeholder="过滤：工具名 / 会话 / 文本">
+  <select id="kindFilter">
+    <option value="">全部事件</option>
+    <option value="model_response">模型响应（含思考）</option>
+    <option value="tool_call">工具调用</option>
+    <option value="qq_send">QQ 发送</option>
+    <option value="model_request">模型请求</option>
+  </select>
+  <label class="stat"><input type="checkbox" id="autoScroll" checked> 自动滚动</label>
+  <button id="clearBtn">清空</button>
+</header>
+<main id="main"><div class="empty">等待事件…</div></main>
+
+<script>
+(function () {
+  const main = document.getElementById('main');
+  const statusEl = document.getElementById('status');
+  const liveEl = document.getElementById('live');
+  const statsEl = document.getElementById('stats');
+  const filterEl = document.getElementById('filter');
+  const kindEl = document.getElementById('kindFilter');
+  const autoScrollEl = document.getElementById('autoScroll');
+
+  let lastId = 0;
+  let events = [];
+  const collapsed = new Set();
+  const MAX_EVENTS = 4000;
+
+  const kindLabel = {
+    turn_start: '请求开始',
+    model_request: '模型请求',
+    model_response: '模型响应',
+    tool_call: '工具调用',
+    qq_send: 'QQ 发送',
+    turn_end: '请求结束',
+    note: '备注'
+  };
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function matches(ev) {
+    const kind = kindEl.value;
+    if (kind && ev.kind !== kind) return false;
+    const q = filterEl.value.trim().toLowerCase();
+    if (!q) return true;
+    const hay = [
+      ev.title, ev.turnId, ev.reasoning, ev.content, ev.body, ev.error,
+      (ev.fields || []).map(f => f.key + '=' + f.value).join(' ')
+    ].join('\n').toLowerCase();
+    return hay.indexOf(q) >= 0;
+  }
+
+  function renderEvent(ev) {
+    const parts = [];
+    parts.push('<div class="ev ' + esc(ev.kind) + '">');
+    parts.push('<div class="ev-head">');
+    parts.push('<span class="ev-title">' + esc(ev.title || kindLabel[ev.kind] || ev.kind) + '</span>');
+    parts.push('<span class="pill">' + esc(kindLabel[ev.kind] || ev.kind) + '</span>');
+    parts.push('<span class="ev-time">' + esc(ev.time) + '</span>');
+    if (ev.durationMs) parts.push('<span class="ev-dur">' + ev.durationMs + ' ms</span>');
+    if (ev.error) parts.push('<span class="ev-err">错误：' + esc(ev.error) + '</span>');
+    parts.push('</div>');
+
+    if (ev.fields && ev.fields.length) {
+      parts.push('<div class="fields">');
+      for (const f of ev.fields) {
+        parts.push('<span class="field">' + esc(f.key) + ': <b>' + esc(f.value) + '</b></span>');
+      }
+      parts.push('</div>');
+    }
+    if (ev.reasoning) {
+      parts.push('<div class="block"><div class="block-label">思考过程</div><pre class="reasoning">' + esc(ev.reasoning) + '</pre></div>');
+    }
+    if (ev.content) {
+      const label = ev.kind === 'tool_call' ? '工具返回' : (ev.kind === 'qq_send' ? '消息内容' : '内容');
+      const cls = ev.kind === 'tool_call' ? 'result' : 'content';
+      parts.push('<div class="block"><div class="block-label">' + label + '</div><pre class="' + cls + '">' + esc(ev.content) + '</pre></div>');
+    }
+    if (ev.body) {
+      const label = ev.kind === 'tool_call' ? '调用参数' : (ev.kind === 'qq_send' ? '消息结构' : '请求体');
+      parts.push('<div class="block"><div class="block-label">' + label + '</div><pre class="body">' + esc(ev.body) + '</pre></div>');
+    }
+    parts.push('</div>');
+    return parts.join('');
+  }
+
+  function render() {
+    const visible = events.filter(matches);
+    if (!visible.length) {
+      main.innerHTML = '<div class="empty">' + (events.length ? '没有匹配的事件' : '等待事件…') + '</div>';
+      return;
+    }
+    const groups = new Map();
+    for (const ev of visible) {
+      const key = ev.turnId || 'system';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(ev);
+    }
+    const html = [];
+    for (const [turnId, list] of groups) {
+      const first = list[0];
+      const start = list.find(e => e.kind === 'turn_start');
+      const end = list.find(e => e.kind === 'turn_end');
+      const isCollapsed = collapsed.has(turnId);
+      const meta = [];
+      if (start) {
+        for (const f of start.fields || []) meta.push(f.key + '=' + f.value);
+      }
+      const toolCount = list.filter(e => e.kind === 'tool_call').length;
+      const sendCount = list.filter(e => e.kind === 'qq_send').length;
+      html.push('<section class="turn' + (isCollapsed ? ' collapsed' : '') + '" data-turn="' + esc(turnId) + '">');
+      html.push('<div class="turn-head">');
+      html.push('<span class="id">' + esc(turnId) + '</span>');
+      html.push('<span class="meta">' + esc(meta.join(' · ')) + '</span>');
+      html.push('<span class="badge">工具 ' + toolCount + '</span>');
+      html.push('<span class="badge">发送 ' + sendCount + '</span>');
+      if (end && end.durationMs) html.push('<span class="badge">' + end.durationMs + ' ms</span>');
+      if (end && end.error) html.push('<span class="badge" style="color:var(--red)">失败</span>');
+      html.push('<span class="meta">' + esc(first.time) + '</span>');
+      html.push('</div><div class="turn-body">');
+      for (const ev of list) html.push(renderEvent(ev));
+      html.push('</div></section>');
+    }
+    main.innerHTML = html.join('');
+  }
+
+  main.addEventListener('click', function (e) {
+    const head = e.target.closest('.turn-head');
+    if (!head) return;
+    const turn = head.parentElement;
+    const id = turn.getAttribute('data-turn');
+    if (collapsed.has(id)) collapsed.delete(id); else collapsed.add(id);
+    turn.classList.toggle('collapsed');
+  });
+
+  async function poll() {
+    try {
+      const resp = await fetch('/api/events?after=' + lastId, { cache: 'no-store' });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const data = await resp.json();
+      liveEl.classList.remove('off');
+      statusEl.textContent = '已连接';
+      if (data.stats) {
+        statsEl.textContent = '事件 ' + data.stats.events + '/' + data.stats.maxEvents +
+          ' · 进行中 ' + data.stats.activeTurns + ' · 运行 ' + data.stats.uptimeSec + 's';
+      }
+      if (data.reset) {
+        events = [];
+        collapsed.clear();
+      }
+      if (data.events && data.events.length) {
+        events = events.concat(data.events);
+        if (events.length > MAX_EVENTS) events = events.slice(events.length - MAX_EVENTS);
+        lastId = data.lastId || lastId;
+        render();
+        if (autoScrollEl.checked) window.scrollTo(0, document.body.scrollHeight);
+      } else if (data.reset) {
+        lastId = data.lastId || 0;
+        render();
+      }
+    } catch (err) {
+      liveEl.classList.add('off');
+      statusEl.textContent = '连接失败：' + err.message;
+    }
+  }
+
+  document.getElementById('clearBtn').addEventListener('click', async function () {
+    try {
+      await fetch('/api/clear', { method: 'POST' });
+    } catch (err) { /* ignore */ }
+    events = [];
+    lastId = 0;
+    collapsed.clear();
+    render();
+  });
+
+  filterEl.addEventListener('input', render);
+  kindEl.addEventListener('change', render);
+
+  render();
+  poll();
+  setInterval(poll, 1000);
+})();
+</script>
+</body>
+</html>

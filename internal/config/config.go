@@ -52,6 +52,7 @@ type AgentConfig struct {
 	Temperature         float64                `json:"temperature"`
 	Debug               bool                   `json:"debug"`
 	DebugLogPath        string                 `json:"debugLogPath"`
+	DebugTrace          DebugTraceConfig       `json:"debugTrace"`
 	Vision              VisionConfig           `json:"vision"`
 	TaskGuard           TaskGuardConfig        `json:"taskGuard"`
 	ForwardImage        ForwardImageConfig     `json:"forwardImage"`
@@ -61,6 +62,16 @@ type AgentConfig struct {
 	EHReq               EHReqConfig            `json:"ehReq"`
 	QBittorrent         QBittorrentConfig      `json:"qbittorrent"`
 	Amap                AmapConfig             `json:"amap"`
+}
+
+// DebugTraceConfig 是 agent 调试跟踪页面的配置。
+// 未显式设置 enabled 时跟随 agent.debug；页面会展示模型思考、工具调用参数与返回、
+// 以及组合消息发送到 QQ 的完整过程，仅建议在可信内网使用。
+type DebugTraceConfig struct {
+	Enabled      *bool  `json:"enabled"`
+	Addr         string `json:"addr"`
+	MaxEvents    int    `json:"maxEvents"`
+	MaxBodyChars int    `json:"maxBodyChars"`
 }
 
 // AmapConfig 是高德 Web 服务（restapi.amap.com）的配置。
@@ -372,6 +383,19 @@ func (cfg AgentConfig) withDefaults() AgentConfig {
 	}
 	if cfg.DebugLogPath == "" {
 		cfg.DebugLogPath = "data/agent_api_body.log"
+	}
+	if cfg.DebugTrace.Enabled == nil {
+		enabled := cfg.Debug
+		cfg.DebugTrace.Enabled = &enabled
+	}
+	if cfg.DebugTrace.Addr == "" {
+		cfg.DebugTrace.Addr = "0.0.0.0:18080"
+	}
+	if cfg.DebugTrace.MaxEvents <= 0 {
+		cfg.DebugTrace.MaxEvents = 2000
+	}
+	if cfg.DebugTrace.MaxBodyChars <= 0 {
+		cfg.DebugTrace.MaxBodyChars = 20000
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.Vision.Mode)) {
 	case "tool":

@@ -89,7 +89,11 @@ func (p *plugin) callAnalyzeImages(ctx *zero.Ctx, prompt string) (string, error)
 	}
 	requestCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
 	defer cancel()
+	turn := p.activeTraceTurn(ctx)
+	p.traceModelRequest(turn, "vision", req)
+	startedAt := time.Now()
 	resp, err := client.CreateChatCompletion(requestCtx, req)
+	p.traceModelResponse(turn, "vision", req.Model, &resp, err, time.Since(startedAt))
 	if err != nil {
 		return "", fmt.Errorf("视觉模型请求失败: %w", err)
 	}

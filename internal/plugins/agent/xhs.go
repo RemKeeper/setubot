@@ -202,7 +202,7 @@ func (p *plugin) sendXHSImages(ctx *zero.Ctx, results []xhsSetuResult, images []
 		return
 	}
 	log.Printf("[agent/xhs] 按帖子合并发送: sender=%d 帖子数=%d 图片数=%d 节点数=%d", ctx.Event.UserID, len(results), imageCount, len(nodes))
-	ctx.Send(nodes)
+	p.send(ctx, nodes, "xhs_images")
 }
 
 func (p *plugin) saveXHSLast(ctx *zero.Ctx, results []xhsSetuResult) error {

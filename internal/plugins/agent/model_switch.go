@@ -25,18 +25,18 @@ type pendingModelSelection struct {
 
 func (p *plugin) switchModelCommand(ctx *zero.Ctx, command string) {
 	if !p.isSuperUser(ctx.Event.UserID) {
-		ctx.Send("仅管理员可以切换模型")
+		p.send(ctx, "仅管理员可以切换模型")
 		return
 	}
 	if strings.TrimSpace(p.cfg.APIKey) == "" {
-		ctx.Send("Agent 接口 API Key 未配置")
+		p.send(ctx, "Agent 接口 API Key 未配置")
 		return
 	}
 
-	ctx.Send("正在获取可用模型列表...")
+	p.send(ctx, "正在获取可用模型列表...")
 	models, err := p.fetchModels()
 	if err != nil {
-		ctx.Send(fmt.Sprintf("获取模型列表失败：%v", err))
+		p.send(ctx, fmt.Sprintf("获取模型列表失败：%v", err))
 		return
 	}
 
@@ -48,7 +48,7 @@ func (p *plugin) switchModelCommand(ctx *zero.Ctx, command string) {
 	if query != "" {
 		models = matchModels(models, query)
 		if len(models) == 0 {
-			ctx.Send(fmt.Sprintf("未找到匹配 %q 的模型，请换个关键词", query))
+			p.send(ctx, fmt.Sprintf("未找到匹配 %q 的模型，请换个关键词", query))
 			return
 		}
 		if len(models) == 1 {
@@ -62,7 +62,7 @@ func (p *plugin) switchModelCommand(ctx *zero.Ctx, command string) {
 		promptModels = promptModels[:modelDisplayLimit]
 	}
 	p.setPendingModelSelection(p.sessionKey(ctx), promptModels)
-	ctx.Send(formatModelChoices(promptModels, len(models), p.currentModel()))
+	p.send(ctx, formatModelChoices(promptModels, len(models), p.currentModel()))
 }
 
 func (p *plugin) handlePendingModelSelection(ctx *zero.Ctx, command string) bool {
@@ -82,13 +82,13 @@ func (p *plugin) handlePendingModelSelection(ctx *zero.Ctx, command string) bool
 	command = strings.TrimSpace(command)
 	if command == "取消" || strings.EqualFold(command, "cancel") {
 		p.clearPendingModelSelection(p.sessionKey(ctx))
-		ctx.Send("已取消模型切换")
+		p.send(ctx, "已取消模型切换")
 		return true
 	}
 
 	if number, err := strconv.Atoi(command); err == nil {
 		if number < 1 || number > len(selection.models) {
-			ctx.Send(fmt.Sprintf("请输入 1-%d 的编号，或回复模型名关键词；回复“取消”退出", len(selection.models)))
+			p.send(ctx, fmt.Sprintf("请输入 1-%d 的编号，或回复模型名关键词；回复“取消”退出", len(selection.models)))
 			return true
 		}
 		p.clearPendingModelSelection(p.sessionKey(ctx))
@@ -99,13 +99,13 @@ func (p *plugin) handlePendingModelSelection(ctx *zero.Ctx, command string) bool
 	matches := matchModels(selection.models, command)
 	switch len(matches) {
 	case 0:
-		ctx.Send("当前列表中没有匹配模型，请回复编号、其他关键词或“取消”")
+		p.send(ctx, "当前列表中没有匹配模型，请回复编号、其他关键词或“取消”")
 	case 1:
 		p.clearPendingModelSelection(p.sessionKey(ctx))
 		p.applyModel(ctx, matches[0])
 	default:
 		p.setPendingModelSelection(p.sessionKey(ctx), matches)
-		ctx.Send(formatModelChoices(matches, len(matches), p.currentModel()))
+		p.send(ctx, formatModelChoices(matches, len(matches), p.currentModel()))
 	}
 	return true
 }
@@ -210,11 +210,11 @@ func formatModelChoices(models []string, total int, current string) string {
 func (p *plugin) applyModel(ctx *zero.Ctx, model string) {
 	model = strings.TrimSpace(model)
 	if model == "" {
-		ctx.Send("模型名不能为空")
+		p.send(ctx, "模型名不能为空")
 		return
 	}
 	if err := config.UpdateAgentModel(p.configPath, model); err != nil {
-		ctx.Send(fmt.Sprintf("保存模型配置失败：%v", err))
+		p.send(ctx, fmt.Sprintf("保存模型配置失败：%v", err))
 		return
 	}
 
@@ -222,7 +222,7 @@ func (p *plugin) applyModel(ctx *zero.Ctx, model string) {
 	p.cfg.Model = model
 	p.runtimeM.Unlock()
 	p.clearSessionAndSuppressHistory(p.sessionKey(ctx))
-	ctx.Send(fmt.Sprintf("已切换模型为 %s，并保存到配置文件；当前会话上下文已重置", model))
+	p.send(ctx, fmt.Sprintf("已切换模型为 %s，并保存到配置文件；当前会话上下文已重置", model))
 }
 
 func (p *plugin) currentModel() string {

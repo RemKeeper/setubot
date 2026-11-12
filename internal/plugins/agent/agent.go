@@ -52,6 +52,7 @@ type plugin struct {
 	amapHTTP                   *http.Client
 	amapCache                  map[string]amapCacheEntry
 	amapCacheM                 sync.Mutex
+	trace                      *traceStore
 }
 
 type conversationSession struct {
@@ -77,6 +78,10 @@ func Register(cfg config.AgentConfig, nickNames []string, superUsers []int64, co
 		configPath:                 configPath,
 		modelPicks:                 make(map[string]pendingModelSelection),
 		amapCache:                  make(map[string]amapCacheEntry),
+	}
+	if cfg.DebugTrace.Enabled != nil && *cfg.DebugTrace.Enabled {
+		p.trace = newTraceStore(cfg.DebugTrace)
+		p.startTraceServer(cfg.DebugTrace)
 	}
 	p.ehTags = newEHTagStore(ehTagRuntimeConfig{
 		Enabled:   cfg.EHTag.Enabled,
@@ -218,53 +223,56 @@ func (p *plugin) isHelpText(command string) bool {
 }
 
 func (p *plugin) help(ctx *zero.Ctx) {
-	ctx.Send("Agent 插件命令：\n1. 群聊：@机器人 <问题>\n2. 私聊：直接发送 <问题>\n3. 重置上下文\n4. 切换模型 [模型名关键词]（仅管理员）\n5. skill 读取 <文件名>\n6. memory 写入 <键>: <内容>\n7. memory 读取 <键>\n8. memory 列表\n说明：群聊记忆按群隔离，不同群不会互相污染；agent 会在回答后自动抽取少量长期记忆。\n小红书：来点涩图 / 来N张涩图 / 来点关键词涩图 / 不喜欢\n浏览器工具由 agent 自动调用：goto/click/type/html/screenshot/evaluate/scroll")
+	p.send(ctx, "Agent 插件命令：\n1. 群聊：@机器人 <问题>\n2. 私聊：直接发送 <问题>\n3. 重置上下文\n4. 切换模型 [模型名关键词]（仅管理员）\n5. skill 读取 <文件名>\n6. memory 写入 <键>: <内容>\n7. memory 读取 <键>\n8. memory 列表\n说明：群聊记忆按群隔离，不同群不会互相污染；agent 会在回答后自动抽取少量长期记忆。\n小红书：来点涩图 / 来N张涩图 / 来点关键词涩图 / 不喜欢\n浏览器工具由 agent 自动调用：goto/click/type/html/screenshot/evaluate/scroll")
 }
 
 func (p *plugin) agentCommand(ctx *zero.Ctx, prompt string) {
 	if !p.cfg.Enabled {
-		ctx.Send("Agent 功能未启用")
+		p.send(ctx, "Agent 功能未启用")
 		return
 	}
 	if p.cfg.APIKey == "" {
-		ctx.Send("Agent 接口 API Key 未配置")
+		p.send(ctx, "Agent 接口 API Key 未配置")
 		return
 	}
 	if !p.cfg.Vision.Enabled && strings.TrimSpace(prompt) == "" {
 		if replyID := replyMessageID(ctx.Event.Message); replyID != "" {
 			replied := ctx.GetMessage(replyID, true)
 			if strings.TrimSpace(messagePlainText(replied.Elements)) == "" && hasMessageImages(replied.Elements) {
-				ctx.Send("Agent 识图功能未启用，请在 agent.vision.enabled 中开启")
+				p.send(ctx, "Agent 识图功能未启用，请在 agent.vision.enabled 中开启")
 				return
 			}
 		}
 	}
 	if strings.TrimSpace(prompt) == "" && !(p.cfg.Vision.Enabled && hasMessageImages(ctx.Event.Message)) && replyMessageID(ctx.Event.Message) == "" {
-		ctx.Send("请输入 agent 问题")
+		p.send(ctx, "请输入 agent 问题")
 		return
 	}
 	if matches := agentAliasPattern.FindStringSubmatch(prompt); matches != nil {
 		prompt = matches[1]
 	}
 
-	ctx.Send("Agent 正在思考...")
-	answer, err := p.runAgent(ctx, strings.TrimSpace(prompt))
+	turn := p.traceStartTurn(ctx, strings.TrimSpace(prompt), p.sessionKey(ctx))
+	p.send(ctx, "Agent 正在思考...", "thinking")
+	answer, err := p.runAgent(ctx, strings.TrimSpace(prompt), turn)
 	if err != nil {
-		ctx.Send(fmt.Sprintf("Agent 执行失败：%v", err))
+		p.send(ctx, fmt.Sprintf("Agent 执行失败：%v", err), "error")
+		p.traceEndTurn(turn, "", err)
 		return
 	}
 
 	finalMsg := truncate(answer, p.cfg.MaxResponseChars)
 	log.Printf("[agent] 发送消息体类型=%T 内容=%q", finalMsg, truncateRunes(finalMsg, 500))
-	ctx.Send(finalMsg)
+	p.send(ctx, finalMsg, "final")
+	p.traceEndTurn(turn, finalMsg, nil)
 }
 
 func (p *plugin) resetContext(ctx *zero.Ctx) {
 	p.clearSessionAndSuppressHistory(p.sessionKey(ctx))
-	ctx.Send("已重置当前上下文")
+	p.send(ctx, "已重置当前上下文")
 }
 
-func (p *plugin) runAgent(ctx *zero.Ctx, prompt string) (string, error) {
+func (p *plugin) runAgent(ctx *zero.Ctx, prompt string, turn *traceTurn) (string, error) {
 	sessionKey := p.sessionKey(ctx)
 	skills, _ := p.listSkillNames()
 	system := p.cfg.SystemPrompt
@@ -291,9 +299,12 @@ func (p *plugin) runAgent(ctx *zero.Ctx, prompt string) (string, error) {
 	turnMessages := []chatMessage{p.userChatMessage(ctx, prompt)}
 	bootstrap := p.bootstrapHistory(ctx, sessionKey)
 	messages := p.buildMessagesWithBootstrap(system, sessionKey, bootstrap, turnMessages)
+	if taskGuardActive {
+		p.traceNote(turn, "长流程任务约束已启用", fmt.Sprintf("maxToolRounds=%d\n%s", maxToolRounds, p.cfg.TaskGuard.CompletionPrompt))
+	}
 
 	for i := 0; i <= maxToolRounds; i++ {
-		resp, err := p.chat(messages)
+		resp, err := p.chat(turn, messages)
 		if err != nil {
 			return "", err
 		}
@@ -309,13 +320,15 @@ func (p *plugin) runAgent(ctx *zero.Ctx, prompt string) (string, error) {
 			p.appendSession(sessionKey, turnMessages)
 			answer := strings.TrimSpace(msg.Content)
 			relatedMemories, _ := p.SearchScopedMemory(p.memoryQuery(ctx, prompt, sessionKey), 8, p.memoryAllowedPrefixes(ctx))
-			p.maybeExtractMemory(ctx, prompt, answer, relatedMemories)
+			p.maybeExtractMemory(ctx, turn, prompt, answer, relatedMemories)
 			return answer, nil
 		}
 
 		for _, call := range msg.ToolCalls {
 			p.debugLogf("[agent/tool] round=%d call_id=%s name=%s args=%s", i, call.ID, call.Function.Name, truncateRunes(call.Function.Arguments, 4000))
+			toolStartedAt := time.Now()
 			result := p.compactToolResult(call.Function.Name, p.callTool(ctx, call.Function.Name, call.Function.Arguments), p.cfg.MaxToolResultChars)
+			p.traceToolCall(turn, i, call, result, time.Since(toolStartedAt))
 			p.debugLogf("[agent/tool] round=%d call_id=%s name=%s result=%s", i, call.ID, call.Function.Name, truncateRunes(result, 6000))
 			toolMessage := chatMessage{
 				Role:       openai.ChatMessageRoleTool,
@@ -800,7 +813,10 @@ func (p *plugin) summarizeContext(previousSummary string, messages []chatMessage
 		Temperature: 0.2,
 	}
 	p.debugLogChatRequest("summarize_context", req)
+	p.traceModelRequest(nil, "summarize_context", req)
+	startedAt := time.Now()
 	resp, err := p.aiClient.CreateChatCompletion(context.Background(), req)
+	p.traceModelResponse(nil, "summarize_context", req.Model, &resp, err, time.Since(startedAt))
 	if err != nil {
 		return "", err
 	}
@@ -811,11 +827,11 @@ func (p *plugin) summarizeContext(previousSummary string, messages []chatMessage
 	return strings.TrimSpace(resp.Choices[0].Message.Content), nil
 }
 
-func (p *plugin) maybeExtractMemory(ctx *zero.Ctx, userPrompt string, assistantAnswer string, relatedMemories string) {
+func (p *plugin) maybeExtractMemory(ctx *zero.Ctx, turn *traceTurn, userPrompt string, assistantAnswer string, relatedMemories string) {
 	if p.cfg.APIKey == "" || strings.TrimSpace(userPrompt) == "" || strings.TrimSpace(assistantAnswer) == "" {
 		return
 	}
-	result, err := p.extractMemory(ctx, userPrompt, assistantAnswer, relatedMemories)
+	result, err := p.extractMemory(ctx, turn, userPrompt, assistantAnswer, relatedMemories)
 	if err != nil {
 		log.Printf("[agent] 自动抽取记忆失败: %v", err)
 		return
@@ -833,7 +849,7 @@ func (p *plugin) maybeExtractMemory(ctx *zero.Ctx, userPrompt string, assistantA
 	}
 }
 
-func (p *plugin) extractMemory(ctx *zero.Ctx, userPrompt string, assistantAnswer string, relatedMemories string) (memoryExtractionResult, error) {
+func (p *plugin) extractMemory(ctx *zero.Ctx, turn *traceTurn, userPrompt string, assistantAnswer string, relatedMemories string) (memoryExtractionResult, error) {
 	identity := p.requestIdentityContext(ctx)
 	content := "请判断以下一轮对话是否包含值得写入长期记忆的信息。只保存稳定、未来仍有用的信息，例如用户明确偏好、长期事实、后续要遵守的规则、项目约定、持续任务上下文。不要保存敏感信息、账号密钥、Cookie、一次性闲聊、临时请求、未经确认的推测。群聊记忆必须只适用于当前群，不要泛化到其他群。\n\n"
 	content += "必须只输出一个 JSON 对象，不要使用 Markdown，不要附加解释。格式：{\"should_write\": boolean, \"key\": string, \"content\": string, \"reason\": string}\n"
@@ -851,7 +867,10 @@ func (p *plugin) extractMemory(ctx *zero.Ctx, userPrompt string, assistantAnswer
 		Temperature: 0,
 	}
 	p.debugLogChatRequest("extract_memory", req)
+	p.traceModelRequest(turn, "extract_memory", req)
+	startedAt := time.Now()
 	resp, err := p.aiClient.CreateChatCompletion(context.Background(), req)
+	p.traceModelResponse(turn, "extract_memory", req.Model, &resp, err, time.Since(startedAt))
 	if err != nil {
 		return memoryExtractionResult{}, err
 	}
@@ -1077,11 +1096,11 @@ func sanitizeToolMessagePairs(messages []chatMessage) []chatMessage {
 	return cleaned
 }
 
-func (p *plugin) chat(messages []chatMessage) (*openai.ChatCompletionResponse, error) {
-	return p.chatWithTools("chat_completion", fitMessagesToCharBudget(messages, p.cfg.MaxContextChars), p.toolDefinitions())
+func (p *plugin) chat(turn *traceTurn, messages []chatMessage) (*openai.ChatCompletionResponse, error) {
+	return p.chatWithTools(turn, "chat_completion", fitMessagesToCharBudget(messages, p.cfg.MaxContextChars), p.toolDefinitions())
 }
 
-func (p *plugin) chatWithTools(kind string, messages []chatMessage, tools []openai.Tool) (*openai.ChatCompletionResponse, error) {
+func (p *plugin) chatWithTools(turn *traceTurn, kind string, messages []chatMessage, tools []openai.Tool) (*openai.ChatCompletionResponse, error) {
 	req := openai.ChatCompletionRequest{
 		Model:       p.currentModel(),
 		Messages:    messages,
@@ -1090,7 +1109,11 @@ func (p *plugin) chatWithTools(kind string, messages []chatMessage, tools []open
 		Temperature: float32(p.cfg.Temperature),
 	}
 	p.debugLogChatRequest(kind, req)
+	p.traceModelRequest(turn, kind, req)
+	startedAt := time.Now()
 	resp, err := p.aiClient.CreateChatCompletion(context.Background(), req)
+	elapsed := time.Since(startedAt)
+	p.traceModelResponse(turn, kind, req.Model, &resp, err, elapsed)
 	if err != nil {
 		p.debugLogf("[agent/model] chat_completion error=%v", err)
 		return nil, err
@@ -1163,68 +1186,68 @@ func (p *plugin) debugLogChatRequest(kind string, req openai.ChatCompletionReque
 
 func (p *plugin) readSkillCommand(ctx *zero.Ctx, command string) {
 	if !p.cfg.Enabled {
-		ctx.Send("Agent 功能未启用")
+		p.send(ctx, "Agent 功能未启用")
 		return
 	}
 	matches := skillReadPattern.FindStringSubmatch(command)
 	if matches == nil {
-		ctx.Send("skill 命令格式：<昵称> skill 读取 <文件名>")
+		p.send(ctx, "skill 命令格式：<昵称> skill 读取 <文件名>")
 		return
 	}
 	content, err := p.readSkillFile(strings.TrimSpace(matches[1]))
 	if err != nil {
-		ctx.Send(fmt.Sprintf("读取 skill 失败：%v", err))
+		p.send(ctx, fmt.Sprintf("读取 skill 失败：%v", err))
 		return
 	}
-	ctx.Send(truncate(content, p.cfg.MaxResponseChars))
+	p.send(ctx, truncate(content, p.cfg.MaxResponseChars))
 }
 
 func (p *plugin) writeMemoryCommand(ctx *zero.Ctx, command string) {
 	if !p.cfg.Enabled {
-		ctx.Send("Agent 功能未启用")
+		p.send(ctx, "Agent 功能未启用")
 		return
 	}
 	matches := memoryWritePattern.FindStringSubmatch(command)
 	if matches == nil {
-		ctx.Send("memory 写入格式：<昵称> memory 写入 <键>: <内容>")
+		p.send(ctx, "memory 写入格式：<昵称> memory 写入 <键>: <内容>")
 		return
 	}
 	if err := p.writeScopedMemoryFile(p.memoryScopePrefix(ctx), matches[1], matches[2]); err != nil {
-		ctx.Send(fmt.Sprintf("写入记忆失败：%v", err))
+		p.send(ctx, fmt.Sprintf("写入记忆失败：%v", err))
 		return
 	}
-	ctx.Send("已写入记忆")
+	p.send(ctx, "已写入记忆")
 }
 
 func (p *plugin) readMemoryCommand(ctx *zero.Ctx, command string) {
 	if !p.cfg.Enabled {
-		ctx.Send("Agent 功能未启用")
+		p.send(ctx, "Agent 功能未启用")
 		return
 	}
 	matches := memoryReadPattern.FindStringSubmatch(command)
 	if matches == nil {
-		ctx.Send("memory 读取格式：<昵称> memory 读取 <键>")
+		p.send(ctx, "memory 读取格式：<昵称> memory 读取 <键>")
 		return
 	}
 	content, err := p.readScopedMemoryFile(p.memoryScopePrefix(ctx), matches[1])
 	if err != nil {
-		ctx.Send(fmt.Sprintf("读取记忆失败：%v", err))
+		p.send(ctx, fmt.Sprintf("读取记忆失败：%v", err))
 		return
 	}
-	ctx.Send(truncate(content, p.cfg.MaxResponseChars))
+	p.send(ctx, truncate(content, p.cfg.MaxResponseChars))
 }
 
 func (p *plugin) listMemory(ctx *zero.Ctx) {
 	names, err := p.listScopedMemoryNames(p.memoryAllowedPrefixes(ctx))
 	if err != nil {
-		ctx.Send(fmt.Sprintf("读取记忆列表失败：%v", err))
+		p.send(ctx, fmt.Sprintf("读取记忆列表失败：%v", err))
 		return
 	}
 	if len(names) == 0 {
-		ctx.Send("暂无记忆")
+		p.send(ctx, "暂无记忆")
 		return
 	}
-	ctx.Send("记忆列表：\n" + strings.Join(names, "\n"))
+	p.send(ctx, "记忆列表：\n"+strings.Join(names, "\n"))
 }
 
 func (p *plugin) callTool(ctx *zero.Ctx, name string, rawArgs string) string {
@@ -1300,7 +1323,7 @@ func (p *plugin) callTool(ctx *zero.Ctx, name string, rawArgs string) string {
 		content, err := p.callQBittorrent(ctx, args)
 		return toolResult(content, err)
 	case "browser_task":
-		content, err := p.runBrowserSubagent(stringArg(args, "goal"), stringArg(args, "start_url"))
+		content, err := p.runBrowserSubagent(ctx, stringArg(args, "goal"), stringArg(args, "start_url"))
 		return toolResult(content, err)
 	case "analyze_images":
 		content, err := p.callAnalyzeImages(ctx, stringArg(args, "prompt"))

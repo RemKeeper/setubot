@@ -81,7 +81,7 @@ func (p *plugin) sendForwardImagesWithID(ctx *zero.Ctx, images []string, prefixN
 	if len(images) == 1 && len(prefixNodes) == 0 {
 		msg := message.Image(images[0])
 		log.Printf("[agent/forward_images] 单图发送: sender=%d 类型=%T 内容=%+v", ctx.Event.UserID, msg, msg)
-		return ctx.Send(msg), nil
+		return p.send(ctx, msg, "forward_image"), nil
 	}
 
 	nodes := make(message.Message, 0, len(prefixNodes)+len(images))
@@ -91,7 +91,7 @@ func (p *plugin) sendForwardImagesWithID(ctx *zero.Ctx, images []string, prefixN
 	}
 
 	log.Printf("[agent/forward_images] 合并转发发送: sender=%d 节点数=%d 类型=%T", ctx.Event.UserID, len(nodes), nodes)
-	return ctx.Send(nodes), nil
+	return p.send(ctx, nodes, "forward_images"), nil
 }
 
 func (p *plugin) buildForwardWebPImages(images []string) ([]string, error) {

@@ -7,6 +7,49 @@ import (
 	"testing"
 )
 
+func TestAgentDebugTraceDefaults(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	content := []byte(`{"agent":{"debug":true}}`)
+	if err := os.WriteFile(path, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.DebugTrace.Enabled == nil || !*cfg.Agent.DebugTrace.Enabled {
+		t.Fatal("debugTrace.enabled should follow agent.debug when unset")
+	}
+	if cfg.Agent.DebugTrace.Addr != "0.0.0.0:18080" {
+		t.Fatalf("unexpected default addr: %q", cfg.Agent.DebugTrace.Addr)
+	}
+	if cfg.Agent.DebugTrace.MaxEvents != 2000 || cfg.Agent.DebugTrace.MaxBodyChars != 20000 {
+		t.Fatalf("unexpected defaults: %#v", cfg.Agent.DebugTrace)
+	}
+}
+
+func TestAgentDebugTraceExplicitDisable(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	content := []byte(`{"agent":{"debug":true,"debugTrace":{"enabled":false,"addr":"127.0.0.1:9999","maxEvents":10,"maxBodyChars":100}}}`)
+	if err := os.WriteFile(path, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.DebugTrace.Enabled == nil || *cfg.Agent.DebugTrace.Enabled {
+		t.Fatal("explicit debugTrace.enabled=false must be preserved")
+	}
+	if cfg.Agent.DebugTrace.Addr != "127.0.0.1:9999" || cfg.Agent.DebugTrace.MaxEvents != 10 || cfg.Agent.DebugTrace.MaxBodyChars != 100 {
+		t.Fatalf("explicit values not preserved: %#v", cfg.Agent.DebugTrace)
+	}
+}
+
 func TestUpdateAgentModelPreservesOtherSettings(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")

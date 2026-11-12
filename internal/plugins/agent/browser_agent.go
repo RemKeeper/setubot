@@ -4,15 +4,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	openai "github.com/sashabaranov/go-openai"
+	zero "github.com/wdvxdr1123/ZeroBot"
 )
 
-func (p *plugin) runBrowserSubagent(goal string, startURL string) (string, error) {
+func (p *plugin) runBrowserSubagent(ctx *zero.Ctx, goal string, startURL string) (string, error) {
 	goal = strings.TrimSpace(goal)
 	if goal == "" {
 		return "", fmt.Errorf("浏览器任务目标不能为空")
 	}
+	turn := p.activeTraceTurn(ctx)
 
 	p.browserM.Lock()
 	defer p.browserM.Unlock()
@@ -32,7 +35,7 @@ func (p *plugin) runBrowserSubagent(goal string, startURL string) (string, error
 
 	for step := 0; step < maxSteps; step++ {
 		messages = fitMessagesToCharBudget(messages, p.cfg.MaxContextChars)
-		resp, err := p.chatWithTools("browser_subagent", messages, browserToolDefinitions())
+		resp, err := p.chatWithTools(turn, "browser_subagent", messages, browserToolDefinitions())
 		if err != nil {
 			return "", err
 		}
@@ -56,8 +59,10 @@ func (p *plugin) runBrowserSubagent(goal string, startURL string) (string, error
 				messages = append(messages, chatMessage{Role: openai.ChatMessageRoleTool, ToolCallID: call.ID, Content: "参数 JSON 解析失败：" + err.Error()})
 				continue
 			}
+			toolStartedAt := time.Now()
 			content, err := p.callBrowser(call.Function.Name, args)
 			result := p.compactToolResult(call.Function.Name, toolResult(content, err), p.cfg.Browser.MaxResultChars)
+			p.traceToolCall(turn, step, call, result, time.Since(toolStartedAt))
 			messages = append(messages, chatMessage{Role: openai.ChatMessageRoleTool, ToolCallID: call.ID, Content: result})
 		}
 	}
