@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -42,14 +43,43 @@ func TestSelectEHGalleryThumbsRangeAndLimit(t *testing.T) {
 		{PageNo: 1}, {PageNo: 2}, {PageNo: 3}, {PageNo: 4}, {PageNo: 5},
 	}
 
-	got := selectEHGalleryThumbs(thumbs, 2, 4, 0)
+	got := selectEHGalleryThumbs(thumbs, 2, 4, 0, 0)
 	if len(got) != 3 || got[0].PageNo != 2 || got[2].PageNo != 4 {
 		t.Fatalf("unexpected range selection: %+v", got)
 	}
 
-	got = selectEHGalleryThumbs(thumbs, 0, 0, 2)
+	got = selectEHGalleryThumbs(thumbs, 0, 0, 2, 0)
 	if len(got) != 2 || got[0].PageNo != 1 || got[1].PageNo != 2 {
 		t.Fatalf("unexpected limited selection: %+v", got)
+	}
+}
+
+func TestSelectEHGalleryThumbsFirstN(t *testing.T) {
+	thumbs := []ehGalleryThumb{
+		{PageNo: 1}, {PageNo: 2}, {PageNo: 3}, {PageNo: 4}, {PageNo: 5},
+	}
+
+	got := selectEHGalleryThumbs(thumbs, 0, 0, 0, 3)
+	if len(got) != 3 || got[0].PageNo != 1 || got[2].PageNo != 3 {
+		t.Fatalf("unexpected first_n selection: %+v", got)
+	}
+
+	// first_n=0 表示全本发送。
+	got = selectEHGalleryThumbs(thumbs, 0, 0, 0, 0)
+	if len(got) != len(thumbs) {
+		t.Fatalf("first_n=0 should keep all thumbs, got %d", len(got))
+	}
+
+	// first_n 大于总页数时按实际页数返回。
+	got = selectEHGalleryThumbs(thumbs, 0, 0, 0, 99)
+	if len(got) != len(thumbs) {
+		t.Fatalf("first_n beyond page count should keep all thumbs, got %d", len(got))
+	}
+
+	// first_n 与 start_page 同时使用时取交集。
+	got = selectEHGalleryThumbs(thumbs, 2, 0, 0, 3)
+	if len(got) != 2 || got[0].PageNo != 2 || got[1].PageNo != 3 {
+		t.Fatalf("unexpected first_n with start_page selection: %+v", got)
 	}
 }
 
@@ -140,6 +170,32 @@ func TestFinalizeEHGalleryResultTruncatesFailures(t *testing.T) {
 	}
 	if result.FailuresOmitted != 5 {
 		t.Fatalf("unexpected omitted count: %d", result.FailuresOmitted)
+	}
+}
+
+func TestFinalizeEHGalleryResultWarnsFirstN(t *testing.T) {
+	p := &plugin{}
+	result := ehGallerySendResult{
+		PageCount:      100,
+		FirstN:         10,
+		RequestedPages: 10,
+		ResolvedImages: 10,
+		BatchTotal:     1,
+		BatchSent:      1,
+		SentImages:     10,
+	}
+
+	p.finalizeEHGalleryResult(&result, time.Now(), 0)
+
+	found := false
+	for _, warning := range result.Warnings {
+		if strings.Contains(warning, "first_n=10") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected first_n warning, got %+v", result.Warnings)
 	}
 }
 

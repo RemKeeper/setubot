@@ -123,6 +123,7 @@ type ehGallerySendResult struct {
 	DownloadFailed  int                     `json:"downloadFailed"`
 	SkippedPages    int                     `json:"skippedPages"`
 	BatchSize       int                     `json:"batchSize"`
+	FirstN          int                     `json:"firstN,omitempty"`
 	BatchTotal      int                     `json:"batchTotal"`
 	BatchSent       int                     `json:"batchSent"`
 	SentImages      int                     `json:"sentImages"`
@@ -291,6 +292,10 @@ func (p *plugin) callEHSendGallery(ctx *zero.Ctx, args map[string]interface{}) (
 	startPage := numberArg(args, "start_page", 1)
 	endPage := numberArg(args, "end_page", 0)
 	maxImages := numberArg(args, "max_images", 0)
+	firstN := numberArg(args, "first_n", 0)
+	if firstN < 0 {
+		firstN = 0
+	}
 	concurrency := clamp(numberArg(args, "concurrency", 2), 1, 6)
 
 	fetcher := newEHGalleryFetcher(p, time.Duration(intervalMs)*time.Millisecond, retries)
@@ -304,6 +309,7 @@ func (p *plugin) callEHSendGallery(ctx *zero.Ctx, args map[string]interface{}) (
 		Token:      ref.Token,
 		WebPHidden: webpHidden,
 		BatchSize:  batchSize,
+		FirstN:     firstN,
 		CooldownMs: intervalMs,
 		Retries:    retries,
 		Batches:    make([]ehGalleryBatchResult, 0, 8),
@@ -318,7 +324,7 @@ func (p *plugin) callEHSendGallery(ctx *zero.Ctx, args map[string]interface{}) (
 	result.CookieLoaded = cookie != ""
 	result.ProxyEnabled = proxyEnabled
 
-	snapshot, err := fetcher.collectThumbs(ctxBackground, ref)
+	snapshot, err := fetcher.collectThumbs(ctxBackground, ref, firstN)
 	if err != nil {
 		return "", err
 	}
@@ -329,7 +335,7 @@ func (p *plugin) callEHSendGallery(ctx *zero.Ctx, args map[string]interface{}) (
 	result.QuotaExceeded = snapshot.QuotaExceeded
 	result.Warnings = append(result.Warnings, snapshot.Warnings...)
 
-	thumbs := selectEHGalleryThumbs(snapshot.Thumbs, startPage, endPage, maxImages)
+	thumbs := selectEHGalleryThumbs(snapshot.Thumbs, startPage, endPage, maxImages, firstN)
 	result.RequestedPages = len(thumbs)
 	if len(thumbs) == 0 {
 		if len(snapshot.Thumbs) == 0 {
@@ -455,6 +461,9 @@ func (p *plugin) finalizeEHGalleryResult(result *ehGallerySendResult, startedAt 
 	if result.RequestedPages == 0 {
 		result.Warnings = append(result.Warnings, "没有可发送的图片页，请检查 start_page/end_page 范围或作品页数")
 	}
+	if result.FirstN > 0 && (result.PageCount == 0 || result.FirstN < result.PageCount) {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("本次按 first_n=%d 只发送画廊前 %d 张图，未发送全本", result.FirstN, result.FirstN))
+	}
 	if result.BatchTotal > 0 && result.BatchSent < result.BatchTotal {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("%d 个批次发送失败，详见 batches", result.BatchTotal-result.BatchSent))
 	}
@@ -530,7 +539,8 @@ func (p *plugin) sendEHGalleryBatches(ctx *zero.Ctx, result *ehGallerySendResult
 }
 
 // collectThumbs 翻页拉取作品详情页缩略图入口，并解析标题与总页数。
-func (f *ehGalleryFetcher) collectThumbs(ctx context.Context, ref ehGalleryRef) (ehGallerySnapshot, error) {
+// limit > 0 时，收集到足够多的缩略图入口后即停止翻页，避免为「只发前 N 张」白拉整本。
+func (f *ehGalleryFetcher) collectThumbs(ctx context.Context, ref ehGalleryRef, limit int) (ehGallerySnapshot, error) {
 	snapshot := ehGallerySnapshot{GalleryURL: ref.URL, Site: ref.Site, GID: ref.GID, Token: ref.Token}
 	path := fmt.Sprintf("/g/%s/%s/", ref.GID, url.PathEscape(ref.Token))
 	seen := make(map[int]struct{})
@@ -581,6 +591,7 @@ func (f *ehGalleryFetcher) collectThumbs(ctx context.Context, ref ehGalleryRef) 
 		}
 
 		added := 0
+		withinLimit := 0
 		for _, thumb := range parseEHGalleryThumbs(body, ref.Site) {
 			if _, ok := seen[thumb.PageNo]; ok {
 				continue
@@ -588,8 +599,15 @@ func (f *ehGalleryFetcher) collectThumbs(ctx context.Context, ref ehGalleryRef) 
 			seen[thumb.PageNo] = struct{}{}
 			snapshot.Thumbs = append(snapshot.Thumbs, thumb)
 			added++
+			if limit > 0 && thumb.PageNo <= limit {
+				withinLimit++
+			}
 		}
 		if thumbPage > 0 && added == 0 {
+			break
+		}
+		// 只需要前 limit 张时，凑够页码范围内的缩略图入口就停止翻页。
+		if limit > 0 && withinLimit >= limit {
 			break
 		}
 		if snapshot.PageCount > 0 && len(snapshot.Thumbs) >= snapshot.PageCount {
@@ -768,14 +786,21 @@ func maxEHThumbPage(body string) int {
 	return maxPage
 }
 
-func selectEHGalleryThumbs(thumbs []ehGalleryThumb, startPage int, endPage int, maxImages int) []ehGalleryThumb {
+func selectEHGalleryThumbs(thumbs []ehGalleryThumb, startPage int, endPage int, maxImages int, firstN int) []ehGalleryThumb {
 	if startPage < 1 {
 		startPage = 1
+	}
+	if firstN < 0 {
+		firstN = 0
 	}
 
 	selected := make([]ehGalleryThumb, 0, len(thumbs))
 	for _, thumb := range thumbs {
 		if thumb.PageNo < startPage {
+			continue
+		}
+		// firstN > 0 时只发送画廊最前面的 firstN 张，0 表示发送全本。
+		if firstN > 0 && thumb.PageNo > firstN {
 			continue
 		}
 		if endPage > 0 && thumb.PageNo > endPage {

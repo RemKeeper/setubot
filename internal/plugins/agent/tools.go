@@ -540,7 +540,7 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 			"page_no":    numberSchema("图片页序号，从 1 开始"),
 			"reload_key": stringSchema("可选 nl reload key"),
 		}, []string{"image_hash", "gid", "page_no"}),
-		functionTool("eh_send_gallery", "【EH/EX 整本发送一站式工具】传入作品链接（例如 https://exhentai.org/g/4022117/22c0b08fdc/）即可原子化完成整条流程：自动翻页拉取作品正文缩略图入口、解析全部正文图片页、下载到本地缓存、默认转换成 WebP 隐藏图，并按 batch_size（默认 30，上限 30）切成多份合并转发聊天记录依次发送到当前聊天。请求之间内置冷却间隔（cooldown_ms）与失败重试（retries），遇到 EH 配额限制会自动停止后续拉取。工具在全部批次处理完后一次性回传结果：ok/complete、pageCount、requestedPages/resolvedImages/downloaded/cacheHit/downloadFailed/skippedPages、batchTotal/batchSent/sentImages，以及 batches 数组里每一批的 ok、count、firstPage/lastPage、messageId、attempts、elapsedMs、error；failures 数组按页码列出解析失败或下载失败的明细。用户已经给出作品链接并要求「发整本/全部图片/分批发」时应直接调用本工具，不要再手工调用 eh_req_gallery、eh_req_image_page、eh_download_images 或 send_forward_images_batches 逐步拼流程。", map[string]interface{}{
+		functionTool("eh_send_gallery", "【EH/EX 整本发送一站式工具】传入作品链接（例如 https://exhentai.org/g/4022117/22c0b08fdc/）即可原子化完成整条流程：自动翻页拉取作品正文缩略图入口、解析全部正文图片页、下载到本地缓存、默认转换成 WebP 隐藏图，并按 batch_size（默认 30，上限 30）切成多份合并转发聊天记录依次发送到当前聊天。默认发送全本；传 first_n=N 时只发送画廊最前面的 N 张图（first_n=0 或不传即全本），用户说「只发前几张」「先发几张看看」时使用。请求之间内置冷却间隔（cooldown_ms）与失败重试（retries），遇到 EH 配额限制会自动停止后续拉取。工具在全部批次处理完后一次性回传结果：ok/complete、pageCount、requestedPages/resolvedImages/downloaded/cacheHit/downloadFailed/skippedPages、batchTotal/batchSent/sentImages，以及 batches 数组里每一批的 ok、count、firstPage/lastPage、messageId、attempts、elapsedMs、error；failures 数组按页码列出解析失败或下载失败的明细。用户已经给出作品链接并要求「发整本/全部图片/分批发」时应直接调用本工具，不要再手工调用 eh_req_gallery、eh_req_image_page、eh_download_images 或 send_forward_images_batches 逐步拼流程。", map[string]interface{}{
 			"gallery_url":     stringSchema("作品详情页链接，形如 https://exhentai.org/g/{gid}/{token}/；站点会从域名自动识别"),
 			"site":            enumSchema("可选站点覆盖，默认按 gallery_url 域名判断", []string{"EX", "EH"}),
 			"gid":             stringSchema("可选；未传 gallery_url 时可用 gid+token 定位作品"),
@@ -550,6 +550,7 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 			"prefer_original": boolSchema("可选；true 时优先下载 originalImageUrl 原图（更慢更占缓存）"),
 			"start_page":      numberSchema("可选；起始页码，默认 1"),
 			"end_page":        numberSchema("可选；结束页码，0 或不传表示到最后一页"),
+			"first_n":         numberSchema("可选；只发送画廊最前面的 N 张图，0 或不传表示发送全本。用户说「只发前 10 张」「先发几张看看」时使用"),
 			"max_images":      numberSchema("可选；最多处理多少张，0 或不传表示不限制（同时受内部上限约束）"),
 			"cooldown_ms":     numberSchema("可选；相邻 EH 页面请求的最小间隔毫秒，默认取 agent.ehReq.galleryCooldownMs（1100）"),
 			"retries":         numberSchema("可选；单个请求最多尝试次数，默认取 agent.ehReq.galleryRetries（3）"),

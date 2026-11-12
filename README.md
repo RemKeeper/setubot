@@ -158,6 +158,7 @@ EH/EX 工具默认建议关闭，确认需要后再启用。
 - 解析正文图片页并下载到本地 `eh_image_cache/{gid}/{token}/` 缓存，已缓存图片直接复用。
 - 默认把每张图转成以 `agent.forwardImage.webpSurfacePath` 为表层的 WebP 隐藏图；`webpHidden=false` 时直接发原图。
 - 按 `batch_size`（默认 30，上限 30）切片，每一片作为一份独立的合并转发聊天记录发送。
+- 默认发送全本；传 `first_n=N` 时只发送画廊最前面的 N 张图（`first_n=0` 或不传即全本），此时缩略图翻页也会在凑够 N 张后提前停止。
 - 拉取正文自带冷却（`cooldown_ms`）与重试（`retries`），命中 EH 配额限制时自动停止后续拉取。
 - 全部批次处理完后一次性回传结构化结果：`ok`/`complete`、`batchTotal`/`batchSent`/`sentImages`、`batches[]`（每批的 `ok`、`count`、`firstPage`/`lastPage`、`messageId`、`attempts`、`elapsedMs`、`error`），以及 `failures[]` 里按页码列出的解析/下载失败明细。
 
