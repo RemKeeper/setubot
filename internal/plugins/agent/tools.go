@@ -511,19 +511,21 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 				"key":       stringSchema("标签 key，例如 chinese"),
 			}, []string{"namespace", "key"}),
 		}, []string{"tags"}),
-		functionTool("eh_req_search", "请求 E-Hentai/ExHentai 搜索页。Cookie 只从 config/env/本地文件注入，不允许通过参数传入，也不会在结果中回显。", map[string]interface{}{
+		functionTool("eh_req_search", "请求 E-Hentai/ExHentai 搜索页。Cookie 只从 config/env/本地文件注入，不允许通过参数传入，也不会在结果中回显。默认返回原始 HTML；传 format=markdown 时返回解析好的结构化 markdown（标题、gid/token、分类、页数、评分、标签、封面、翻页），token 消耗约为原始 HTML 的 1/5，推荐 agent 优先使用。", map[string]interface{}{
 			"site":     enumSchema("站点，默认 EX", []string{"EX", "EH"}),
 			"keyword":  stringSchema("f_search 搜索表达式，例如 language:chinese artist:name"),
 			"page":     numberSchema("搜索页码，从 0 开始"),
 			"advanced": boolSchema("是否添加 s_act=advanced"),
+			"format":   enumSchema("返回格式：raw 原始 HTML（默认），markdown 解析后的结构化文本（推荐）", []string{"raw", "markdown"}),
 			"query":    objectFreeSchema("可选额外 query 参数；cookie/authorization 等敏感键会被忽略"),
 		}, []string{}),
-		functionTool("eh_req_gallery", "请求 E-Hentai/ExHentai 漫画详情页 /g/{gid}/{token}/。Cookie 自动注入且不回显。", map[string]interface{}{
+		functionTool("eh_req_gallery", "请求 E-Hentai/ExHentai 漫画详情页 /g/{gid}/{token}/。Cookie 自动注入且不回显。默认返回原始 HTML；传 format=markdown 时返回解析好的结构化 markdown（标题、分类、上传者、页数、评分、收藏数、按命名空间分组的标签、缩略图入口、评论列表），推荐 agent 优先使用。评论需要 show_comments=true（默认）才会返回完整列表。", map[string]interface{}{
 			"site":          enumSchema("站点，默认 EX", []string{"EX", "EH"}),
 			"gid":           numberSchema("漫画 gid"),
 			"token":         stringSchema("漫画 token"),
 			"page":          numberSchema("缩略图分页 p，默认 0"),
-			"show_comments": boolSchema("是否设置 hc=1 显示完整评论，默认 true"),
+			"show_comments": boolSchema("是否设置 hc=1 显示完整评论，默认 true；format=markdown 时评论会解析到「## 评论」区块"),
+			"format":        enumSchema("返回格式：raw 原始 HTML（默认），markdown 解析后的结构化文本（推荐）", []string{"raw", "markdown"}),
 		}, []string{"gid", "token"}),
 		functionTool("eh_req_api", "请求 E-Hentai/ExHentai 官方 API，例如 gdata、tagsuggest。Cookie 自动注入且不回显。", map[string]interface{}{
 			"site":      enumSchema("站点，默认 EX", []string{"EX", "EH"}),

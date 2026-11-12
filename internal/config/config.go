@@ -133,6 +133,9 @@ type EHTagConfig struct {
 	Enabled   bool   `json:"enabled"`
 	SourceURL string `json:"sourceURL"`
 	CachePath string `json:"cachePath"`
+	// BlockedTags 是 agent 不可见的标签屏蔽列表，命中后从所有返回给 agent 的标签中剔除。
+	// 支持三种写法：`namespace:key` 精确匹配、`key` 匹配任意命名空间、`namespace:*` 屏蔽整个命名空间。
+	BlockedTags []string `json:"blockedTags"`
 }
 
 type EHReqConfig struct {

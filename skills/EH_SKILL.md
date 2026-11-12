@@ -44,8 +44,8 @@ argument-hint: "关键词或标签；可选：站点 EH/EX、结果数量、正�
 
 当前项目提供 `ehReqClient` 系列工具，agent 执行本 skill 时应优先通过这些工具请求 E-Hentai/ExHentai，不要自行拼接 Cookie，也不要向用户索要 Cookie 明文：
 
-- `eh_req_search`: 请求搜索页 `{siteBase}/`，支持 `keyword`、`page`、`advanced` 和额外 query 参数。
-- `eh_req_gallery`: 请求详情页 `/g/{gid}/{token}/`，支持缩略图分页 `page` 与 `show_comments`。
+- `eh_req_search`: 请求搜索页 `{siteBase}/`，支持 `keyword`、`page`、`advanced`、`format` 和额外 query 参数。`format=markdown` 时返回解析好的结构化文本（标题、gid/token、分类、页数、评分、标签、封面、翻页），token 消耗约为原始 HTML 的 1/5。
+- `eh_req_gallery`: 请求详情页 `/g/{gid}/{token}/`，支持缩略图分页 `page`、`show_comments` 与 `format`。`format=markdown` 时返回标题、分类、上传者、页数、评分、收藏数、按命名空间分组的标签、缩略图入口和评论列表（作者、评分、时间、正文）。
 - `eh_req_api`: 请求官方 API `/api.php`，支持 `gdata`、`tagsuggest` 等 JSON payload。
 - `eh_req_image_page`: 请求正文图片页 `/s/{imageHash}/{gid}-{pageNo}`，支持 `reload_key`。
 - `eh_download_images`: 并发下载多个正文图片直链到本地结构化缓存，返回 `file:///` 本地图片地址，供 `send_forward_images` 或 `send_forward_images_batches` 发送；单图失败会自动重试。缓存按 `eh_image_cache/{gid}/{token}/` 两层目录保存，并按 `agent.ehReq.imageCacheMaxBytes` 总大小上限自动清理。EH/EX 获取到的正文图片不得直接把远端链接传给合并转发工具，必须先通过本工具落地缓存。
@@ -66,6 +66,30 @@ argument-hint: "关键词或标签；可选：站点 EH/EX、结果数量、正�
 | `cooldown_ms` | 否 | `agent.ehReq.galleryCooldownMs` | 相邻 EH 页面请求的最小间隔毫秒 |
 | `retries` | 否 | `agent.ehReq.galleryRetries` | 单个页面请求最大尝试次数 |
 | `concurrency` | 否 | `2` | 并发解析图片页协程数，范围 1-6 |
+
+### `format` 参数（`eh_req_search` / `eh_req_gallery`）
+
+两个请求工具都支持 `format`：
+
+| 值 | 说明 |
+| --- | --- |
+| `raw`（默认） | 返回原始 HTML，放在 `body` 字段，受 `ehReq.maxBodyChars` 截断 |
+| `markdown` | 返回解析后的结构化 markdown，放在 `markdown` 字段，推荐 agent 优先使用 |
+
+`format=markdown` 的收益（实测）：
+
+- 搜索页 25 条结果：66.7 KB → 13.3 KB（约 20%）
+- 详情页 17 页作品：26.2 KB → 1.4 KB（约 5.5%）
+- 空结果、配额页（509）、登录失效都会转成一句明确提示，不需要 agent 自己判断 66 KB HTML
+
+解析要点（对齐 JHenTai 的 `eh_spider_parser.dart`）：
+
+- 搜索页按 `.itg.gltm/.gltc/.glte/.gld` 探测布局，跳过表头与广告行
+- 评分是雪碧图坐标：`x` 每 `-16px` 减 1 星，`y=-21px` 表示半星
+- 封面优先取 `data-src`（懒加载占位是 base64 gif）
+- 详情页标签按 `id="td_{namespace}:{key}"` 解析，`_` 还原为空格，同命名空间合并；`class="gtw"` 标注「(错误)」，`gtl` 属常见低置信标记不输出
+- 详情页缩略图多页共用一张雪碧图，只输出图片页入口，最多列 40 个
+- 详情页评论解析 `#cdiv > .c1`：作者、评分、时间、正文；上传者评论标注「（上传者）」，最多 20 条、单条正文最多 500 字，超出截断并提示剩余条数。评论需要 `show_comments=true`（默认）
 
 这些工具会从本地配置读取 Cookie 并注入请求头，只返回 `cookieLoaded` 布尔值，不会把 Cookie 内容返回给 agent。Cookie 来源按优先级读取：
 
@@ -163,6 +187,27 @@ EH/EX 请求可单独配置代理，不影响 OpenAI、Exa、浏览器等其它�
 - `eh_tag_search`: 根据中文名、英文 key、命名空间或简介搜索标签候选。
 - `eh_tag_resolve_keyword`: 将中文标签解析为 E-Hentai 搜索表达式，例如 `中文` -> `language:chinese`。
 - `eh_tag_translate`: 将 `{namespace, key}` 标签翻译为中文展示信息。
+
+### 标签屏蔽（agent 不可见）
+
+`agent.ehTag.blockedTags` 配置的标签不会返回给 agent，命中后直接从结果中剔除：
+
+| 写法 | 含义 | 示例 |
+| --- | --- | --- |
+| `namespace:key` | 精确匹配 | `female:lolicon` |
+| `key` | 匹配任意命名空间下的同名 key | `lolicon` |
+| `namespace:*` | 屏蔽整个命名空间 | `female:*` |
+
+匹配不区分大小写，`_` 与空格等价（`big_breasts` 与 `big breasts` 视为同一标签）。
+
+生效范围：
+
+- `eh_req_search` / `eh_req_gallery` 的 `format=markdown` 输出
+- `eh_tag_search` 的 `matches`
+- `eh_tag_resolve_keyword` 的 `candidates` 与 `selected`；若 `resolvedKeyword` 命中屏蔽，会回退为原始关键词并置 `source=rawKeyword`
+- `eh_tag_translate` 的 `tags`
+
+注意：屏蔽只影响返回给 agent 的内容，不改变实际请求参数。若 agent 自己拼出被屏蔽的搜索表达式，仍会正常请求。
 
 推荐调用规则：
 

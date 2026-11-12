@@ -84,7 +84,8 @@
     "ehTag": {
       "enabled": false,
       "sourceURL": "https://fastly.jsdelivr.net/gh/EhTagTranslation/DatabaseReleases/db.html.json",
-      "cachePath": "data/eh_tag_db.html.json"
+      "cachePath": "data/eh_tag_db.html.json",
+      "blockedTags": []
     },
     "ehReq": {
       "enabled": false,

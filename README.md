@@ -141,6 +141,7 @@ go build -o setubot .
 EH/EX 工具默认建议关闭，确认需要后再启用。
 
 - `ehTag.enabled`：启用 EhTagTranslation 标签索引。
+- `ehTag.blockedTags`：agent 不可见的标签屏蔽列表，命中后从所有返回给 agent 的标签中剔除（搜索结果、详情页标签、`eh_tag_search`/`eh_tag_resolve_keyword`/`eh_tag_translate` 均生效）。支持三种写法：`namespace:key` 精确匹配（如 `female:lolicon`）、`key` 匹配任意命名空间（如 `lolicon`）、`namespace:*` 屏蔽整个命名空间（如 `female:*`）。匹配不区分大小写，`_` 与空格等价。
 - `ehReq.enabled`：启用 EH/EX 请求工具。
 - `ehReq.cookie`：不建议直接写入真实 Cookie，优先使用环境变量或本地文件。
 - `ehReq.cookieEnv`：Cookie 环境变量名，默认 `EHENTAI_COOKIE`。
@@ -149,6 +150,17 @@ EH/EX 工具默认建议关闭，确认需要后再启用。
 - `ehReq.imageCacheMaxBytes`：EH 正文图片本地缓存总大小上限，默认 `2147483648`。图片按 `eh_image_cache/{gid}/{token}/` 两层目录缓存，超过总大小后优先清理最旧文件。
 - `ehReq.galleryCooldownMs`：`eh_send_gallery` 相邻 EH 页面请求的最小间隔毫秒，默认 `1100`。
 - `ehReq.galleryRetries`：`eh_send_gallery` 单个页面请求的最大尝试次数，默认 `3`。
+
+### `eh_req_search` / `eh_req_gallery` 的 `format` 参数
+
+两个请求工具都支持 `format`：
+
+- `raw`（默认）：返回原始 HTML，放在 `body` 字段，受 `ehReq.maxBodyChars` 截断。
+- `markdown`：返回解析后的结构化 markdown，放在 `markdown` 字段，推荐 agent 优先使用。
+
+实测压缩效果：搜索页 25 条结果 66.7 KB → 13.3 KB（约 20%），详情页 17 页作品 26.2 KB → 1.4 KB（约 5.5%）。空结果、配额页（509）、登录失效都会转成一句明确提示。
+
+解析逻辑对齐 JHenTai 的 `eh_spider_parser.dart`：按 `.itg.gltm/.gltc/.glte/.gld` 探测搜索页布局；评分按雪碧图坐标换算（`x` 每 `-16px` 减 1 星，`y=-21px` 为半星）；封面优先取 `data-src`；详情页标签按 `id="td_{namespace}:{key}"` 解析并按命名空间合并，`class="gtw"` 标注「(错误)」；详情页评论解析 `#cdiv > .c1`，输出作者、评分、时间与正文，最多 20 条、单条正文最多 500 字。
 
 ### `eh_send_gallery` 整本发送
 

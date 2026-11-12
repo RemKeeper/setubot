@@ -55,6 +55,13 @@ func (p *plugin) callEHReqSearch(args map[string]interface{}) (string, error) {
 		}
 		query.Set(key, value)
 	}
+	if normalizeEHFormat(stringArg(args, "format")) == ehFormatMarkdown {
+		result, err := client.do(context.Background(), site, http.MethodGet, "/", query, nil, "")
+		if err != nil {
+			return "", err
+		}
+		return renderEHMarkdownResult(result, "search", p.ehTagBlocker)
+	}
 	return client.doJSON(context.Background(), site, http.MethodGet, "/", query, nil, "")
 }
 
@@ -75,6 +82,13 @@ func (p *plugin) callEHReqGallery(args map[string]interface{}) (string, error) {
 		query.Set("hc", "1")
 	}
 	path := fmt.Sprintf("/g/%d/%s/", gid, url.PathEscape(token))
+	if normalizeEHFormat(stringArg(args, "format")) == ehFormatMarkdown {
+		result, err := client.do(context.Background(), site, http.MethodGet, path, query, nil, "")
+		if err != nil {
+			return "", err
+		}
+		return renderEHMarkdownResult(result, "gallery", p.ehTagBlocker)
+	}
 	return client.doJSON(context.Background(), site, http.MethodGet, path, query, nil, "")
 }
 

@@ -40,6 +40,7 @@ type plugin struct {
 	httpClient                 *http.Client
 	memory                     *MemoryStore
 	ehTags                     *ehTagStore
+	ehTagBlocker               *ehTagBlocker
 	sessions                   map[string]*conversationSession
 	historyBootstrapSuppressed map[string]bool
 	sessionM                   sync.Mutex
@@ -82,6 +83,7 @@ func Register(cfg config.AgentConfig, nickNames []string, superUsers []int64, co
 		SourceURL: cfg.EHTag.SourceURL,
 		CachePath: cfg.EHTag.CachePath,
 	}, p.httpClient)
+	p.ehTagBlocker = newEHTagBlocker(cfg.EHTag.BlockedTags)
 	if err := p.ensureStorageDirs(); err != nil {
 		log.Printf("[agent] 初始化目录失败: %v", err)
 	}
