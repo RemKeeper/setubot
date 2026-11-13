@@ -112,6 +112,7 @@ go build -o setubot .
 - `forwardImage.webpCacheMaxBytes`：隐藏图 WebP 缓存目录（`forward_image_webp_cache`）总大小上限，默认 `536870912`。
 - `debug`：是否记录请求体到 `debugLogPath`。公开部署建议关闭。
 - `debugTrace`：调试跟踪页面配置。`enabled` 未设置时跟随 `debug`；开启后会在 `addr`（默认 `0.0.0.0:18080`）启动内网 HTTP 页面，实时展示每轮请求的模型思考过程、模型请求/响应、工具调用参数与返回、以及组合消息发送到 QQ 的完整结构。`maxEvents` 控制内存中保留的事件条数（默认 2000），`maxBodyChars` 控制单条事件正文的字符上限（默认 20000，超出会截断）。页面无鉴权，只建议在可信内网开启，公开部署请保持关闭。
+- `reasoning`：思考内容请求配置。很多 OpenAI 兼容网关默认不返回 `reasoning_content`，只统计 `reasoning_tokens`，此时跟踪页面只能看到「思考 tokens」而看不到思考文本。开启后会在 `/chat/completions` 请求体里注入 `include_reasoning=true`（`includeReasoning`，默认 true），可选注入 `reasoning_effort`（`effort`：`low`/`medium`/`high`），`extra` 可追加任意网关私有字段（如 `{"reasoning":{"enabled":true}}`）。已存在的同名字段不会被覆盖。同时会从原始响应体中补抓 `reasoning_content`、`reasoning`、`thinking`、`reasoning_details` 等字段，兼容非标准网关。
 
 ### `draw`
 
@@ -264,7 +265,7 @@ python3 skills/xhs_dislike.py --keyword "不喜欢的关键词"
 
 `agent.debugTrace.enabled=true`（或 `agent.debug=true` 且未显式关闭 `debugTrace`）时，进程启动后会同时监听 `agent.debugTrace.addr`（默认 `0.0.0.0:18080`），浏览器打开 `http://<内网IP>:18080/` 即可查看实时跟踪：
 
-- **模型思考过程**：每轮模型响应里的 `reasoning_content` 与正文。
+- **模型思考过程**：每轮模型响应里的 `reasoning_content` 与正文。若网关只返回 `reasoning_tokens` 而不回传思考文本，事件里会显示「思考提示」，此时按 `agent.reasoning` 配置注入 `include_reasoning` / `reasoning_effort` 即可拿到思考内容。
 - **模型请求/响应**：请求消息列表、工具定义数量、温度、耗时、token 用量、结束原因。
 - **工具调用**：工具名、调用 ID、完整参数 JSON、工具返回内容与耗时。
 - **QQ 发送**：每次 `ctx.Send` 的消息类型（思考提示/最终回复/合并转发/小红书图片等）、目标会话、消息 ID、段类型统计与完整消息结构 JSON。

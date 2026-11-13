@@ -7,6 +7,57 @@ import (
 	"testing"
 )
 
+func TestAgentReasoningDefaults(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{"agent":{"reasoning":{"enabled":true}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Reasoning.IncludeReasoning == nil || !*cfg.Agent.Reasoning.IncludeReasoning {
+		t.Fatal("includeReasoning should default to true when reasoning.enabled")
+	}
+	if cfg.Agent.Reasoning.Effort != "" {
+		t.Fatalf("unexpected default effort: %q", cfg.Agent.Reasoning.Effort)
+	}
+}
+
+func TestAgentReasoningNormalizesEffort(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{"agent":{"reasoning":{"enabled":true,"effort":" HIGH "}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Reasoning.Effort != "high" {
+		t.Fatalf("effort not normalized: %q", cfg.Agent.Reasoning.Effort)
+	}
+}
+
+func TestAgentReasoningRejectsUnknownEffort(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{"agent":{"reasoning":{"enabled":true,"effort":"extreme"}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Reasoning.Effort != "" {
+		t.Fatalf("unknown effort should be cleared, got %q", cfg.Agent.Reasoning.Effort)
+	}
+}
+
 func TestAgentDebugTraceDefaults(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")

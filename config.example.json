@@ -50,6 +50,12 @@
       "maxEvents": 2000,
       "maxBodyChars": 20000
     },
+    "reasoning": {
+      "enabled": true,
+      "includeReasoning": true,
+      "effort": "",
+      "extra": {}
+    },
     "vision": {
       "enabled": true,
       "mode": "tool",

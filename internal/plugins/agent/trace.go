@@ -312,7 +312,7 @@ func (p *plugin) traceModelRequest(turn *traceTurn, kind string, req openai.Chat
 	})
 }
 
-func (p *plugin) traceModelResponse(turn *traceTurn, kind string, model string, resp *openai.ChatCompletionResponse, err error, elapsed time.Duration) {
+func (p *plugin) traceModelResponse(turn *traceTurn, kind string, model string, resp *openai.ChatCompletionResponse, err error, elapsed time.Duration, capture *reasoningCapture) {
 	if !p.traceEnabled() {
 		return
 	}
@@ -339,6 +339,9 @@ func (p *plugin) traceModelResponse(turn *traceTurn, kind string, model string, 
 
 	choice := resp.Choices[0]
 	ev.Reasoning = choice.Message.ReasoningContent
+	if strings.TrimSpace(ev.Reasoning) == "" && capture != nil {
+		ev.Reasoning = capture.reasoning
+	}
 	ev.Content = choice.Message.Content
 	if choice.FinishReason != "" {
 		ev.Fields = append(ev.Fields, traceField{"结束原因", string(choice.FinishReason)})
@@ -348,6 +351,12 @@ func (p *plugin) traceModelResponse(turn *traceTurn, kind string, model string, 
 			"tokens",
 			fmt.Sprintf("prompt=%d completion=%d total=%d", resp.Usage.PromptTokens, resp.Usage.CompletionTokens, resp.Usage.TotalTokens),
 		})
+	}
+	if resp.Usage.CompletionTokensDetails != nil && resp.Usage.CompletionTokensDetails.ReasoningTokens > 0 {
+		ev.Fields = append(ev.Fields, traceField{"思考tokens", fmt.Sprint(resp.Usage.CompletionTokensDetails.ReasoningTokens)})
+	}
+	if strings.TrimSpace(ev.Reasoning) == "" && resp.Usage.CompletionTokensDetails != nil && resp.Usage.CompletionTokensDetails.ReasoningTokens > 0 {
+		ev.Fields = append(ev.Fields, traceField{"思考提示", "模型产生了思考 token，但网关未回传思考文本；可在 agent.reasoning 中开启 includeReasoning 或 effort"})
 	}
 	if len(choice.Message.ToolCalls) > 0 {
 		names := make([]string, 0, len(choice.Message.ToolCalls))

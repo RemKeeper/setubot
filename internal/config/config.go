@@ -53,6 +53,7 @@ type AgentConfig struct {
 	Debug               bool                   `json:"debug"`
 	DebugLogPath        string                 `json:"debugLogPath"`
 	DebugTrace          DebugTraceConfig       `json:"debugTrace"`
+	Reasoning           ReasoningConfig        `json:"reasoning"`
 	Vision              VisionConfig           `json:"vision"`
 	TaskGuard           TaskGuardConfig        `json:"taskGuard"`
 	ForwardImage        ForwardImageConfig     `json:"forwardImage"`
@@ -72,6 +73,19 @@ type DebugTraceConfig struct {
 	Addr         string `json:"addr"`
 	MaxEvents    int    `json:"maxEvents"`
 	MaxBodyChars int    `json:"maxBodyChars"`
+}
+
+// ReasoningConfig 控制是否向模型请求思考内容。
+// 部分 OpenAI 兼容网关（如 cpa/gemini 系列）默认不返回 reasoning_content，
+// 只有请求体里带 include_reasoning / reasoning_effort 等参数时才会回传思考文本。
+type ReasoningConfig struct {
+	Enabled bool `json:"enabled"`
+	// IncludeReasoning 为 nil 且 Enabled=true 时默认开启，会注入 include_reasoning=true。
+	IncludeReasoning *bool `json:"includeReasoning"`
+	// Effort 非空时注入 reasoning_effort（low/medium/high）。
+	Effort string `json:"effort"`
+	// Extra 是额外注入请求体的字段，用于适配其它网关的私有参数。
+	Extra map[string]interface{} `json:"extra"`
 }
 
 // AmapConfig 是高德 Web 服务（restapi.amap.com）的配置。
@@ -396,6 +410,20 @@ func (cfg AgentConfig) withDefaults() AgentConfig {
 	}
 	if cfg.DebugTrace.MaxBodyChars <= 0 {
 		cfg.DebugTrace.MaxBodyChars = 20000
+	}
+	if cfg.Reasoning.Enabled && cfg.Reasoning.IncludeReasoning == nil {
+		include := true
+		cfg.Reasoning.IncludeReasoning = &include
+	}
+	if cfg.Reasoning.IncludeReasoning == nil {
+		include := false
+		cfg.Reasoning.IncludeReasoning = &include
+	}
+	cfg.Reasoning.Effort = strings.ToLower(strings.TrimSpace(cfg.Reasoning.Effort))
+	switch cfg.Reasoning.Effort {
+	case "low", "medium", "high":
+	default:
+		cfg.Reasoning.Effort = ""
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.Vision.Mode)) {
 	case "tool":

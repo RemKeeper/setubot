@@ -111,7 +111,7 @@ func TestTraceModelResponseCapturesReasoningAndToolCalls(t *testing.T) {
 		}},
 		Usage: openai.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
 	}
-	p.traceModelResponse(turn, "chat_completion", "m", resp, nil, 120*time.Millisecond)
+	p.traceModelResponse(turn, "chat_completion", "m", resp, nil, 120*time.Millisecond, nil)
 
 	events, _, _ := p.trace.snapshot(0, 0)
 	if len(events) != 1 {

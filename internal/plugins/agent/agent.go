@@ -66,6 +66,7 @@ type chatMessage = openai.ChatCompletionMessage
 func Register(cfg config.AgentConfig, nickNames []string, superUsers []int64, configPath string) {
 	aiConfig := openai.DefaultConfig(cfg.APIKey)
 	aiConfig.BaseURL = openAIBaseURL(cfg.BaseURL)
+	aiConfig.HTTPClient = newReasoningHTTPDoer(cfg.Reasoning)
 
 	p := &plugin{
 		cfg:                        cfg,
@@ -815,8 +816,9 @@ func (p *plugin) summarizeContext(previousSummary string, messages []chatMessage
 	p.debugLogChatRequest("summarize_context", req)
 	p.traceModelRequest(nil, "summarize_context", req)
 	startedAt := time.Now()
-	resp, err := p.aiClient.CreateChatCompletion(context.Background(), req)
-	p.traceModelResponse(nil, "summarize_context", req.Model, &resp, err, time.Since(startedAt))
+	requestCtx, capture := withReasoningCapture(context.Background())
+	resp, err := p.aiClient.CreateChatCompletion(requestCtx, req)
+	p.traceModelResponse(nil, "summarize_context", req.Model, &resp, err, time.Since(startedAt), capture)
 	if err != nil {
 		return "", err
 	}
@@ -869,8 +871,9 @@ func (p *plugin) extractMemory(ctx *zero.Ctx, turn *traceTurn, userPrompt string
 	p.debugLogChatRequest("extract_memory", req)
 	p.traceModelRequest(turn, "extract_memory", req)
 	startedAt := time.Now()
-	resp, err := p.aiClient.CreateChatCompletion(context.Background(), req)
-	p.traceModelResponse(turn, "extract_memory", req.Model, &resp, err, time.Since(startedAt))
+	requestCtx, capture := withReasoningCapture(context.Background())
+	resp, err := p.aiClient.CreateChatCompletion(requestCtx, req)
+	p.traceModelResponse(turn, "extract_memory", req.Model, &resp, err, time.Since(startedAt), capture)
 	if err != nil {
 		return memoryExtractionResult{}, err
 	}
@@ -1111,9 +1114,10 @@ func (p *plugin) chatWithTools(turn *traceTurn, kind string, messages []chatMess
 	p.debugLogChatRequest(kind, req)
 	p.traceModelRequest(turn, kind, req)
 	startedAt := time.Now()
-	resp, err := p.aiClient.CreateChatCompletion(context.Background(), req)
+	requestCtx, capture := withReasoningCapture(context.Background())
+	resp, err := p.aiClient.CreateChatCompletion(requestCtx, req)
 	elapsed := time.Since(startedAt)
-	p.traceModelResponse(turn, kind, req.Model, &resp, err, elapsed)
+	p.traceModelResponse(turn, kind, req.Model, &resp, err, elapsed, capture)
 	if err != nil {
 		p.debugLogf("[agent/model] chat_completion error=%v", err)
 		return nil, err

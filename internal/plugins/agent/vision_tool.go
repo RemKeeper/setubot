@@ -82,6 +82,7 @@ func (p *plugin) callAnalyzeImages(ctx *zero.Ctx, prompt string) (string, error)
 
 	clientConfig := openai.DefaultConfig(p.cfg.Vision.APIKey)
 	clientConfig.BaseURL = openAIBaseURL(p.cfg.Vision.BaseURL)
+	clientConfig.HTTPClient = newReasoningHTTPDoer(p.cfg.Reasoning)
 	client := openai.NewClientWithConfig(clientConfig)
 	timeout := p.cfg.Timeout
 	if timeout <= 0 {
@@ -92,8 +93,9 @@ func (p *plugin) callAnalyzeImages(ctx *zero.Ctx, prompt string) (string, error)
 	turn := p.activeTraceTurn(ctx)
 	p.traceModelRequest(turn, "vision", req)
 	startedAt := time.Now()
+	requestCtx, capture := withReasoningCapture(requestCtx)
 	resp, err := client.CreateChatCompletion(requestCtx, req)
-	p.traceModelResponse(turn, "vision", req.Model, &resp, err, time.Since(startedAt))
+	p.traceModelResponse(turn, "vision", req.Model, &resp, err, time.Since(startedAt), capture)
 	if err != nil {
 		return "", fmt.Errorf("视觉模型请求失败: %w", err)
 	}
