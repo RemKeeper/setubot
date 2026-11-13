@@ -6,16 +6,17 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 
 	"setubot/internal/config"
 )
 
-// reasoningCapture 保存一次模型调用中被网关额外返回的思考文本。
-// 部分 OpenAI 兼容网关把思考放在 reasoning / thinking / reasoning_details 等
-// 非标准字段里，go-openai 不会解析，需要从原始响应体里补抓。
+// reasoningCapture 保存一次模型调用中被网关额外返回的思考文本，
+// 以及本次实际注入的思考参数，便于在跟踪页面排查配置是否生效。
 type reasoningCapture struct {
 	reasoning string
+	injected  []string
 }
 
 type reasoningCaptureKey struct{}
@@ -63,6 +64,9 @@ func (d *reasoningHTTPDoer) Do(req *http.Request) (*http.Response, error) {
 	}
 	if changed {
 		setRequestBody(req, injected)
+		if capture := reasoningCaptureFrom(req.Context()); capture != nil {
+			capture.injected = injectedReasoningKeys(original, injected)
+		}
 	}
 
 	resp, err := d.base.Do(req)
@@ -166,6 +170,29 @@ func (d *reasoningHTTPDoer) injectRequestFields(raw []byte) ([]byte, bool, error
 		return raw, false, err
 	}
 	return updated, true, nil
+}
+
+// injectedReasoningKeys 对比注入前后的请求体，返回本次新增的字段名。
+func injectedReasoningKeys(original []byte, injected []byte) []string {
+	var before map[string]interface{}
+	var after map[string]interface{}
+	if err := json.Unmarshal(original, &before); err != nil {
+		before = nil
+	}
+	if err := json.Unmarshal(injected, &after); err != nil {
+		return nil
+	}
+	keys := make([]string, 0, len(after))
+	for key := range after {
+		if before != nil {
+			if _, ok := before[key]; ok {
+				continue
+			}
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // extractReasoningFromBody 从原始响应体中提取思考文本，兼容多种网关字段。

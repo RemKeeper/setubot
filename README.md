@@ -113,6 +113,7 @@ go build -o setubot .
 - `debug`：是否记录请求体到 `debugLogPath`。公开部署建议关闭。
 - `debugTrace`：调试跟踪页面配置。`enabled` 未设置时跟随 `debug`；开启后会在 `addr`（默认 `0.0.0.0:18080`）启动内网 HTTP 页面，实时展示每轮请求的模型思考过程、模型请求/响应、工具调用参数与返回、以及组合消息发送到 QQ 的完整结构。`maxEvents` 控制内存中保留的事件条数（默认 2000），`maxBodyChars` 控制单条事件正文的字符上限（默认 20000，超出会截断）。页面无鉴权，只建议在可信内网开启，公开部署请保持关闭。
 - `reasoning`：思考内容请求配置。很多 OpenAI 兼容网关默认不返回 `reasoning_content`，只统计 `reasoning_tokens`，此时跟踪页面只能看到「思考 tokens」而看不到思考文本。开启后会在 `/chat/completions` 请求体里注入 `include_reasoning=true`（`includeReasoning`，默认 true），可选注入 `reasoning_effort`（`effort`：`low`/`medium`/`high`），`extra` 可追加任意网关私有字段（如 `{"reasoning":{"enabled":true}}`）。已存在的同名字段不会被覆盖。同时会从原始响应体中补抓 `reasoning_content`、`reasoning`、`thinking`、`reasoning_details` 等字段，兼容非标准网关。
+  - **注意**：注入参数只能让「支持输出思考」的模型把思考文本回传，无法让本身不输出思考的模型产生思考文本。实测同一网关下 `mistral/deepseek-v4-1-flash-1017` 无论注入什么参数都只返回 `reasoning_tokens` 而无 `reasoning_content`；`diai/deepseek-v4.1-flash-1017`、`command/deepseek/deepseek-v4.1-flash`、`dpsk/deepseek-flash`、`cpa/gemini-3.8-flash-high` 可以正常回传。跟踪页面的「思考提示」会区分「参数未注入」和「网关不回传」两种情况。
 
 ### `draw`
 

@@ -1108,8 +1108,11 @@ func (p *plugin) chatWithTools(turn *traceTurn, kind string, messages []chatMess
 		Model:       p.currentModel(),
 		Messages:    messages,
 		Tools:       tools,
-		ToolChoice:  "auto",
 		Temperature: float32(p.cfg.Temperature),
+	}
+	// 部分网关在 tools 为空时拒绝 tool_choice，只在真正带工具时才设置。
+	if len(tools) > 0 {
+		req.ToolChoice = "auto"
 	}
 	p.debugLogChatRequest(kind, req)
 	p.traceModelRequest(turn, kind, req)

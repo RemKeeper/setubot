@@ -356,7 +356,7 @@ func (p *plugin) traceModelResponse(turn *traceTurn, kind string, model string, 
 		ev.Fields = append(ev.Fields, traceField{"思考tokens", fmt.Sprint(resp.Usage.CompletionTokensDetails.ReasoningTokens)})
 	}
 	if strings.TrimSpace(ev.Reasoning) == "" && resp.Usage.CompletionTokensDetails != nil && resp.Usage.CompletionTokensDetails.ReasoningTokens > 0 {
-		ev.Fields = append(ev.Fields, traceField{"思考提示", "模型产生了思考 token，但网关未回传思考文本；可在 agent.reasoning 中开启 includeReasoning 或 effort"})
+		ev.Fields = append(ev.Fields, traceField{"思考提示", p.reasoningHint(capture)})
 	}
 	if len(choice.Message.ToolCalls) > 0 {
 		names := make([]string, 0, len(choice.Message.ToolCalls))
@@ -366,6 +366,18 @@ func (p *plugin) traceModelResponse(turn *traceTurn, kind string, model string, 
 		ev.Fields = append(ev.Fields, traceField{"工具调用", strings.Join(names, ", ")})
 	}
 	p.trace.add(ev)
+}
+
+// reasoningHint 生成可操作的诊断提示：区分「参数没注入」和「网关本身不回传」。
+func (p *plugin) reasoningHint(capture *reasoningCapture) string {
+	injected := ""
+	if capture != nil && len(capture.injected) > 0 {
+		injected = strings.Join(capture.injected, ", ")
+	}
+	if injected == "" {
+		return "本次请求未注入任何思考参数（agent.reasoning.enabled=false 或字段已存在）；开启 agent.reasoning.enabled 并设置 includeReasoning/effort 后重试"
+	}
+	return fmt.Sprintf("已注入 %s，但该模型/网关仍未回传思考文本。说明当前模型不支持输出思考内容，请换用会返回 reasoning_content 的模型（例如 diai/deepseek-v4.1-flash-1017、command/deepseek/deepseek-v4.1-flash、dpsk/deepseek-flash、cpa/gemini-3.8-flash-high）", injected)
 }
 
 func (p *plugin) traceToolCall(turn *traceTurn, round int, call openai.ToolCall, result string, elapsed time.Duration) {

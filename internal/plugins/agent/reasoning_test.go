@@ -177,6 +177,53 @@ func TestReasoningDoerFallsBackWhenGatewayRejectsFields(t *testing.T) {
 	}
 }
 
+func TestReasoningHintDistinguishesInjectionFromGateway(t *testing.T) {
+	p := newTestTracePlugin()
+
+	notInjected := p.reasoningHint(nil)
+	if !strings.Contains(notInjected, "未注入") {
+		t.Fatalf("unexpected hint without injection: %q", notInjected)
+	}
+
+	injected := p.reasoningHint(&reasoningCapture{injected: []string{"include_reasoning", "reasoning_effort"}})
+	if !strings.Contains(injected, "include_reasoning") || !strings.Contains(injected, "仍未回传") {
+		t.Fatalf("unexpected hint with injection: %q", injected)
+	}
+}
+
+func TestInjectedReasoningKeys(t *testing.T) {
+	keys := injectedReasoningKeys(
+		[]byte(`{"model":"m","reasoning_effort":"low"}`),
+		[]byte(`{"model":"m","reasoning_effort":"low","include_reasoning":true}`),
+	)
+	if len(keys) != 1 || keys[0] != "include_reasoning" {
+		t.Fatalf("unexpected injected keys: %#v", keys)
+	}
+}
+
+func TestReasoningDoerRecordsInjectedKeys(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer server.Close()
+
+	doer := newReasoningHTTPDoer(config.ReasoningConfig{Enabled: true, IncludeReasoning: boolPtr(true), Effort: "high"})
+	ctx, capture := withReasoningCapture(context.Background())
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(`{"model":"m"}`))
+	resp, err := doer.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if len(capture.injected) != 2 {
+		t.Fatalf("expected 2 injected keys, got %#v", capture.injected)
+	}
+	if capture.injected[0] != "include_reasoning" || capture.injected[1] != "reasoning_effort" {
+		t.Fatalf("unexpected injected keys: %#v", capture.injected)
+	}
+}
+
 func TestExtractReasoningFromBodyVariants(t *testing.T) {
 	cases := []struct {
 		name string
