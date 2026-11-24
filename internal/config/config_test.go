@@ -136,3 +136,26 @@ func TestUpdateAgentModelPreservesOtherSettings(t *testing.T) {
 		t.Fatalf("unexpected updated config: model=%q key=%q", model, key)
 	}
 }
+
+func TestAgentR2Defaults(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{"agent":{"r2":{"enabled":true}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2 := cfg.Agent.R2
+	if !r2.Enabled {
+		t.Fatal("expected r2.enabled to be true")
+	}
+	if r2.AccountIDEnv != "R2_ACCOUNT_ID" || r2.AccessKeyIDEnv != "R2_ACCESS_KEY_ID" || r2.SecretAccessKeyEnv != "R2_SECRET_ACCESS_KEY" || r2.BucketEnv != "R2_BUCKET" {
+		t.Fatalf("unexpected r2 env defaults: %#v", r2)
+	}
+	if r2.Region != "auto" || r2.KeyPrefix != "setubot-temp" || r2.PresignTTLSeconds != 900 || r2.Timeout != 30 {
+		t.Fatalf("unexpected r2 value defaults: %#v", r2)
+	}
+}

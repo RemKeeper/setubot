@@ -63,6 +63,34 @@ type AgentConfig struct {
 	EHReq               EHReqConfig            `json:"ehReq"`
 	QBittorrent         QBittorrentConfig      `json:"qbittorrent"`
 	Amap                AmapConfig             `json:"amap"`
+	R2                  R2Config               `json:"r2"`
+}
+
+// R2Config 是 Cloudflare R2 临时图床（S3 兼容接口）的配置。
+// 启用后，用户消息及引用消息中的原始图片地址不会暴露给模型；
+// 搜图时由机器人自动把图片上传到 R2，仅向模型提供 R2 直链，并在该轮对话结束后自动从 R2 删除。
+type R2Config struct {
+	Enabled            bool   `json:"enabled"`
+	AccountID          string `json:"accountId"`
+	AccountIDEnv       string `json:"accountIdEnv"`
+	Endpoint           string `json:"endpoint"`
+	EndpointEnv        string `json:"endpointEnv"`
+	AccessKeyID        string `json:"accessKeyId"`
+	AccessKeyIDEnv     string `json:"accessKeyIdEnv"`
+	SecretAccessKey    string `json:"secretAccessKey"`
+	SecretAccessKeyEnv string `json:"secretAccessKeyEnv"`
+	Bucket             string `json:"bucket"`
+	BucketEnv          string `json:"bucketEnv"`
+	Region             string `json:"region"`
+	// PublicBaseURL 是 R2 桶绑定的公开域名（如 https://img.example.com 或 https://pub-xxx.r2.dev）。
+	// 留空时自动生成 S3 SigV4 预签名 GET 直链。
+	PublicBaseURL     string `json:"publicBaseURL"`
+	PublicBaseURLEnv  string `json:"publicBaseURLEnv"`
+	KeyPrefix         string `json:"keyPrefix"`
+	PresignTTLSeconds int    `json:"presignTTLSeconds"`
+	Timeout           int    `json:"timeout"`
+	// UploadAllImages 为 true 时所有带图请求都会预先上传到 R2；默认 false 仅在搜图场景自动上传。
+	UploadAllImages bool `json:"uploadAllImages"`
 }
 
 // DebugTraceConfig 是 agent 调试跟踪页面的配置。
@@ -552,6 +580,36 @@ func (cfg AgentConfig) withDefaults() AgentConfig {
 	}
 	if cfg.QBittorrent.Timeout <= 0 {
 		cfg.QBittorrent.Timeout = 15
+	}
+	if cfg.R2.AccountIDEnv == "" {
+		cfg.R2.AccountIDEnv = "R2_ACCOUNT_ID"
+	}
+	if cfg.R2.EndpointEnv == "" {
+		cfg.R2.EndpointEnv = "R2_ENDPOINT"
+	}
+	if cfg.R2.AccessKeyIDEnv == "" {
+		cfg.R2.AccessKeyIDEnv = "R2_ACCESS_KEY_ID"
+	}
+	if cfg.R2.SecretAccessKeyEnv == "" {
+		cfg.R2.SecretAccessKeyEnv = "R2_SECRET_ACCESS_KEY"
+	}
+	if cfg.R2.BucketEnv == "" {
+		cfg.R2.BucketEnv = "R2_BUCKET"
+	}
+	if cfg.R2.PublicBaseURLEnv == "" {
+		cfg.R2.PublicBaseURLEnv = "R2_PUBLIC_BASE_URL"
+	}
+	if strings.TrimSpace(cfg.R2.Region) == "" {
+		cfg.R2.Region = "auto"
+	}
+	if strings.TrimSpace(cfg.R2.KeyPrefix) == "" {
+		cfg.R2.KeyPrefix = "setubot-temp"
+	}
+	if cfg.R2.PresignTTLSeconds <= 0 {
+		cfg.R2.PresignTTLSeconds = 900
+	}
+	if cfg.R2.Timeout <= 0 {
+		cfg.R2.Timeout = 30
 	}
 
 	return cfg

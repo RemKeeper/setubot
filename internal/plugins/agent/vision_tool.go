@@ -56,7 +56,7 @@ func (p *plugin) callAnalyzeImages(ctx *zero.Ctx, prompt string) (string, error)
 	if prompt == "" {
 		prompt = "请详细描述图片内容，并识别其中清晰可见的文字。"
 	}
-	imageDataURLs, err := p.prepareVisionImages(images)
+	imageDataURLs, err := p.prepareVisionImagesForCtx(ctx, images)
 	if err != nil {
 		return "", err
 	}
@@ -108,7 +108,13 @@ func (p *plugin) callAnalyzeImages(ctx *zero.Ctx, prompt string) (string, error)
 		return "", fmt.Errorf("视觉模型返回了空结果")
 	}
 	result = truncateRunes(result, p.cfg.Vision.MaxResultChars)
-	if sources := visionImagePublicSources(images); sources != "" {
+	if p.r2Enabled() {
+		if staged := p.r2StagedImages(ctx); len(staged) > 0 {
+			result += "\n\n[图片临时 R2 搜图直链（仅本轮有效，结束后自动从 R2 删除，请勿作为最终出处发给用户）]\n" + formatR2StagedLinks(staged)
+		} else {
+			result += "\n\n[提示：如需以图搜图/反查出处，请读取 REVERSE_IMAGE_SEARCH_SKILL.md 或调用 prepare_search_images 获取临时 R2 直链]"
+		}
+	} else if sources := visionImagePublicSources(images); sources != "" {
 		result += "\n\n[图片来源（可直接访问）]\n" + sources
 	}
 	return result, nil
@@ -127,9 +133,13 @@ func visionImagePublicSources(images []string) string {
 }
 
 func (p *plugin) prepareVisionImages(images []string) ([]string, error) {
+	return p.prepareVisionImagesForCtx(nil, images)
+}
+
+func (p *plugin) prepareVisionImagesForCtx(ctx *zero.Ctx, images []string) ([]string, error) {
 	prepared := make([]string, 0, len(images))
 	for i, source := range images {
-		dataURL, size, contentType, err := p.visionImageDataURL(source)
+		dataURL, size, contentType, err := p.visionImageDataURLForCtx(ctx, source)
 		if err != nil {
 			return nil, fmt.Errorf("第 %d 张图片处理失败: %w", i+1, err)
 		}
@@ -140,49 +150,73 @@ func (p *plugin) prepareVisionImages(images []string) ([]string, error) {
 }
 
 func (p *plugin) visionImageDataURL(source string) (string, int, string, error) {
+	return p.visionImageDataURLForCtx(nil, source)
+}
+
+func (p *plugin) visionImageDataURLForCtx(ctx *zero.Ctx, source string) (string, int, string, error) {
+	data, contentType, err := p.fetchVisionImageBytes(ctx, source)
+	if err != nil {
+		return "", 0, "", err
+	}
+	return imageBytesDataURL(contentType, data), len(data), contentType, nil
+}
+
+func (p *plugin) fetchVisionImageBytes(ctx *zero.Ctx, source string) ([]byte, string, error) {
+	if cachedData, cachedType, ok := p.lookupR2TurnRawImage(ctx, source); ok {
+		return cachedData, cachedType, nil
+	}
 	if strings.HasPrefix(source, "data:image/") {
 		contentType, data, err := decodeImageDataURL(source)
 		if err != nil {
-			return "", 0, "", err
+			return nil, "", err
 		}
 		if err := p.validateVisionImageSize(len(data)); err != nil {
-			return "", 0, "", err
+			return nil, "", err
 		}
-		return imageBytesDataURL(contentType, data), len(data), contentType, nil
+		p.cacheR2TurnRawImage(ctx, source, data, contentType)
+		return data, contentType, nil
 	}
 	if !strings.HasPrefix(source, "http://") && !strings.HasPrefix(source, "https://") {
-		return "", 0, "", fmt.Errorf("不支持的图片来源")
+		return nil, "", fmt.Errorf("不支持的图片来源")
 	}
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, source, nil)
 	if err != nil {
-		return "", 0, "", err
+		return nil, "", fmt.Errorf("构造图片请求失败")
 	}
 	req.Header.Set("Accept", "image/avif,image/webp,image/apng,image/jpeg,image/png,image/gif,image/*,*/*;q=0.8")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0 Safari/537.36")
 	req.Header.Set("Referer", visionImageReferer(source))
-	resp, err := p.httpClient.Do(req)
+	httpClient := p.httpClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
-		return "", 0, "", fmt.Errorf("下载失败: %w", err)
+		if urlErr, ok := err.(*url.Error); ok && urlErr.Err != nil {
+			return nil, "", fmt.Errorf("下载失败: %v", urlErr.Err)
+		}
+		return nil, "", fmt.Errorf("下载失败")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", 0, "", fmt.Errorf("下载返回 HTTP %d", resp.StatusCode)
+		return nil, "", fmt.Errorf("下载返回 HTTP %d", resp.StatusCode)
 	}
 
 	maxBytes := p.visionMaxImageBytes()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
-		return "", 0, "", fmt.Errorf("读取下载内容失败: %w", err)
+		return nil, "", fmt.Errorf("读取下载内容失败: %w", err)
 	}
 	if int64(len(data)) > maxBytes {
-		return "", 0, "", fmt.Errorf("图片超过 %d 字节限制", maxBytes)
+		return nil, "", fmt.Errorf("图片超过 %d 字节限制", maxBytes)
 	}
 	contentType := normalizeVisionImageContentType(resp.Header.Get("Content-Type"), data)
 	if contentType == "" {
-		return "", 0, "", fmt.Errorf("下载内容不是支持的图片，Content-Type=%q", resp.Header.Get("Content-Type"))
+		return nil, "", fmt.Errorf("下载内容不是支持的图片，Content-Type=%q", resp.Header.Get("Content-Type"))
 	}
-	return imageBytesDataURL(contentType, data), len(data), contentType, nil
+	p.cacheR2TurnRawImage(ctx, source, data, contentType)
+	return data, contentType, nil
 }
 
 func (p *plugin) visionMaxImageBytes() int64 {

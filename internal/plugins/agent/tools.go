@@ -560,9 +560,16 @@ func (p *plugin) toolDefinitions() []openai.Tool {
 		}, []string{"gallery_url"}),
 	}
 	if p.visionToolEnabled() {
-		tools = append(tools, functionTool("analyze_images", "使用独立视觉模型分析当前用户消息及其引用消息中携带的图片。主模型看不到图片本身，遇到图片理解、OCR、内容描述、对比或基于图片回答的问题时必须调用本工具。返回内容末尾会附上可直接访问的图片原始链接，需要反查图片出处或再次使用该图时可直接取用。", map[string]interface{}{
+		analyzeDesc := "使用独立视觉模型分析当前用户消息及其引用消息中携带的图片。主模型看不到图片本身，遇到图片理解、OCR、内容描述、对比或基于图片回答的问题时必须调用本工具。返回内容末尾会附上可直接访问的图片原始链接，需要反查图片出处或再次使用该图时可直接取用。"
+		if p.r2Enabled() {
+			analyzeDesc = "使用独立视觉模型分析当前用户消息及其引用消息中携带的图片。主模型看不到图片本身，遇到图片理解、OCR、内容描述、对比或基于图片回答的问题时必须调用本工具。图片原始地址受保护不会返回；如需以图搜图/反查出处，请读取 REVERSE_IMAGE_SEARCH_SKILL.md 或调用 prepare_search_images 获取临时 Cloudflare R2 直链。"
+		}
+		tools = append(tools, functionTool("analyze_images", analyzeDesc, map[string]interface{}{
 			"prompt": stringSchema("交给视觉模型的具体识图要求，应包含用户原问题以及需要关注的文字、物体、人物、布局、差异等信息"),
 		}, []string{"prompt"}))
+	}
+	if p.r2Enabled() && p.cfg.Vision.Enabled {
+		tools = append(tools, functionTool("prepare_search_images", "将当前用户消息及引用消息中的图片自动上传至 Cloudflare R2 临时图床，返回供浏览器以图搜图使用的 R2 直链。单轮幂等；本轮对话结束后系统会自动从 R2 删除临时对象，严禁将该临时直链当作最终图片出处发给用户。", map[string]interface{}{}, []string{}))
 	}
 	if p.cfg.Exa.Enabled {
 		tools = append(tools, functionTool("exa_search", "使用 Exa.ai 搜索互联网，返回标题、URL、发布时间、作者和 highlights 摘要。适合查询实时信息、网页资料和需要来源的问题。", map[string]interface{}{

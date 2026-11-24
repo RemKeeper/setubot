@@ -133,6 +133,26 @@
       "timeout": 10,
       "cacheTTL": 120,
       "ownerOnly": false
+    },
+    "r2": {
+      "enabled": false,
+      "accountId": "",
+      "accountIdEnv": "R2_ACCOUNT_ID",
+      "endpoint": "",
+      "endpointEnv": "R2_ENDPOINT",
+      "accessKeyId": "",
+      "accessKeyIdEnv": "R2_ACCESS_KEY_ID",
+      "secretAccessKey": "",
+      "secretAccessKeyEnv": "R2_SECRET_ACCESS_KEY",
+      "bucket": "",
+      "bucketEnv": "R2_BUCKET",
+      "region": "auto",
+      "publicBaseURL": "",
+      "publicBaseURLEnv": "R2_PUBLIC_BASE_URL",
+      "keyPrefix": "setubot-temp",
+      "presignTTLSeconds": 900,
+      "timeout": 30,
+      "uploadAllImages": false
     }
   }
 }

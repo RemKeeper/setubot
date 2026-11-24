@@ -52,6 +52,8 @@ type plugin struct {
 	amapHTTP                   *http.Client
 	amapCache                  map[string]amapCacheEntry
 	amapCacheM                 sync.Mutex
+	r2Turns                    map[*zero.Ctx]*r2TurnSession
+	r2TurnsM                   sync.Mutex
 	trace                      *traceStore
 }
 
@@ -79,6 +81,7 @@ func Register(cfg config.AgentConfig, nickNames []string, superUsers []int64, co
 		configPath:                 configPath,
 		modelPicks:                 make(map[string]pendingModelSelection),
 		amapCache:                  make(map[string]amapCacheEntry),
+		r2Turns:                    make(map[*zero.Ctx]*r2TurnSession),
 	}
 	if cfg.DebugTrace.Enabled != nil && *cfg.DebugTrace.Enabled {
 		p.trace = newTraceStore(cfg.DebugTrace)
@@ -275,6 +278,18 @@ func (p *plugin) resetContext(ctx *zero.Ctx) {
 
 func (p *plugin) runAgent(ctx *zero.Ctx, prompt string, turn *traceTurn) (string, error) {
 	sessionKey := p.sessionKey(ctx)
+	hasImages := p.cfg.Vision.Enabled && p.hasRequestImages(ctx)
+	if p.r2Enabled() && hasImages {
+		p.startR2Turn(ctx)
+		defer p.cleanupR2Turn(ctx, turn)
+		if p.shouldPreUploadR2Images(prompt) {
+			if _, err := p.ensureR2TurnUploaded(ctx, turn); err != nil {
+				log.Printf("[agent/r2] 预上传搜图图片失败: %v", err)
+				p.traceNote(turn, "R2 预上传搜图图片失败", err.Error())
+			}
+		}
+	}
+
 	skills, _ := p.listSkillNames()
 	system := p.cfg.SystemPrompt
 	if system == "" {
@@ -284,8 +299,14 @@ func (p *plugin) runAgent(ctx *zero.Ctx, prompt string, turn *traceTurn) (string
 	if len(skills) > 0 {
 		system += "\n可用 skills：" + strings.Join(skills, ", ")
 	}
-	if p.visionToolEnabled() && p.hasRequestImages(ctx) {
-		system += "\n当前用户消息或其引用消息包含图片，但主模型不会直接接收图片画面。你必须调用 analyze_images 工具，把用户对图片的要求作为 prompt 传入；收到识图结果后再结合对话回答。不要仅凭图片占位符猜测内容。占位符中给出的原始链接已经可以直接访问，需要反查图片出处的，可以直接用该链接去搜索。若用户要找图片出处、作者、原图、高清图或番剧来源，必须先调用 read_skill 读取 REVERSE_IMAGE_SEARCH_SKILL.md，按其流程用浏览器以图搜图引擎检索；此时 analyze_images 只用于判断图片类型，禁止把识图描述当作搜索关键词。"
+	if p.visionToolEnabled() && hasImages {
+		if p.r2Enabled() {
+			system += "\n当前用户消息或其引用消息包含图片，但主模型不会直接接收图片画面，且原始图片链接已隐藏保护。图片理解/OCR 请调用 analyze_images；若用户要找图片出处、作者、原图、高清图或番剧来源，必须先调用 read_skill 读取 REVERSE_IMAGE_SEARCH_SKILL.md（系统会自动将图片上传至 Cloudflare R2 并提供临时 R2 直链，也可调用 prepare_search_images 获取），只使用 R2 直链交给浏览器以图搜图引擎检索；此时 analyze_images 只用于判断图片类型，禁止把识图描述当作搜索关键词。临时 R2 直链会在本轮对话结束后自动从 R2 删除，严禁将该临时直链当作最终出处发给用户。"
+		} else {
+			system += "\n当前用户消息或其引用消息包含图片，但主模型不会直接接收图片画面。你必须调用 analyze_images 工具，把用户对图片的要求作为 prompt 传入；收到识图结果后再结合对话回答。不要仅凭图片占位符猜测内容。占位符中给出的原始链接已经可以直接访问，需要反查图片出处的，可以直接用该链接去搜索。若用户要找图片出处、作者、原图、高清图或番剧来源，必须先调用 read_skill 读取 REVERSE_IMAGE_SEARCH_SKILL.md，按其流程用浏览器以图搜图引擎检索；此时 analyze_images 只用于判断图片类型，禁止把识图描述当作搜索关键词。"
+		}
+	} else if !p.visionToolEnabled() && p.r2Enabled() && hasImages {
+		system += "\n当前用户消息中的图片已由系统上传至 Cloudflare R2 临时图床，提供的链接均为临时 R2 直链，可用于以图搜图，并会在本轮对话结束后自动从 R2 删除；严禁把临时 R2 直链当作最终图片出处发给用户。若用户要找图片出处、作者、原图、高清图或番剧来源，必须先调用 read_skill 读取 REVERSE_IMAGE_SEARCH_SKILL.md。"
 	}
 	system += p.requestIdentityContext(ctx)
 	taskGuardActive := p.taskGuardActive(prompt)
@@ -318,7 +339,7 @@ func (p *plugin) runAgent(ctx *zero.Ctx, prompt string, turn *traceTurn) (string
 		messages = append(messages, msg)
 		turnMessages = append(turnMessages, msg)
 		if len(msg.ToolCalls) == 0 {
-			p.appendSession(sessionKey, turnMessages)
+			p.appendSession(sessionKey, p.sanitizeR2TurnMessages(ctx, turnMessages))
 			answer := strings.TrimSpace(msg.Content)
 			relatedMemories, _ := p.SearchScopedMemory(p.memoryQuery(ctx, prompt, sessionKey), 8, p.memoryAllowedPrefixes(ctx))
 			p.maybeExtractMemory(ctx, turn, prompt, answer, relatedMemories)
@@ -352,14 +373,14 @@ func (p *plugin) userChatMessage(ctx *zero.Ctx, prompt string) chatMessage {
 	parts := make([]openai.ChatMessagePart, 0)
 	if replyID := replyMessageID(ctx.Event.Message); replyID != "" {
 		replied := ctx.GetMessage(replyID, true)
-		repliedParts := p.messageParts(replied.Elements)
+		repliedParts := p.messagePartsForCtx(ctx, replied.Elements)
 		if len(repliedParts) > 0 {
 			parts = append(parts, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: "以下是用户引用的消息：\n"})
 			parts = append(parts, repliedParts...)
 			parts = append(parts, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: "\n以下是用户当前发送的消息：\n"})
 		}
 	}
-	parts = append(parts, p.messagePartsWithPrompt(ctx.Event.Message, prompt)...)
+	parts = append(parts, p.messagePartsWithPromptForCtx(ctx, ctx.Event.Message, prompt)...)
 	if links := p.requestImageLinks(ctx); links != "" {
 		parts = append(parts, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: links})
 	}
@@ -377,15 +398,23 @@ func (p *plugin) userChatMessage(ctx *zero.Ctx, prompt string) chatMessage {
 }
 
 func (p *plugin) messageParts(msg message.Message) []openai.ChatMessagePart {
-	return p.messagePartsWithPrompt(msg, "")
+	return p.messagePartsForCtx(nil, msg)
+}
+
+func (p *plugin) messagePartsForCtx(ctx *zero.Ctx, msg message.Message) []openai.ChatMessagePart {
+	return p.messagePartsWithPromptForCtx(ctx, msg, "")
 }
 
 func (p *plugin) messagePartsWithPrompt(msg message.Message, prompt string) []openai.ChatMessagePart {
+	return p.messagePartsWithPromptForCtx(nil, msg, prompt)
+}
+
+func (p *plugin) messagePartsWithPromptForCtx(ctx *zero.Ctx, msg message.Message, prompt string) []openai.ChatMessagePart {
 	if strings.TrimSpace(prompt) == "" || strings.TrimSpace(messagePlainText(msg)) == strings.TrimSpace(prompt) {
-		return p.messagePartsRaw(msg)
+		return p.messagePartsRawForCtx(ctx, msg)
 	}
 
-	parts := p.messagePartsRaw(msg)
+	parts := p.messagePartsRawForCtx(ctx, msg)
 	result := make([]openai.ChatMessagePart, 0, len(parts))
 	textAdded := false
 	for _, part := range parts {
@@ -410,6 +439,10 @@ func (p *plugin) messagePartsWithPrompt(msg message.Message, prompt string) []op
 }
 
 func (p *plugin) messagePartsRaw(msg message.Message) []openai.ChatMessagePart {
+	return p.messagePartsRawForCtx(nil, msg)
+}
+
+func (p *plugin) messagePartsRawForCtx(ctx *zero.Ctx, msg message.Message) []openai.ChatMessagePart {
 	parts := make([]openai.ChatMessagePart, 0, len(msg))
 	for _, segment := range msg {
 		switch segment.Type {
@@ -424,6 +457,28 @@ func (p *plugin) messagePartsRaw(msg message.Message) []openai.ChatMessagePart {
 			}
 			source := agentImageSource(segment)
 			if source != "" {
+				if p.r2Enabled() {
+					r2URL := p.r2StagedDirectURL(ctx, source)
+					if p.visionToolEnabled() {
+						parts = append(parts, openai.ChatMessagePart{
+							Type: openai.ChatMessagePartTypeText,
+							Text: p.r2VisionImagePlaceholder(ctx, r2URL),
+						})
+						continue
+					}
+					if r2URL != "" {
+						parts = append(parts, openai.ChatMessagePart{
+							Type:     openai.ChatMessagePartTypeImageURL,
+							ImageURL: &openai.ChatMessageImageURL{URL: r2URL, Detail: p.visionDetail()},
+						})
+					} else {
+						parts = append(parts, openai.ChatMessagePart{
+							Type: openai.ChatMessagePartTypeText,
+							Text: "[图片：R2 临时图床尚未提供直链，原始图片地址已隐藏]",
+						})
+					}
+					continue
+				}
 				if p.visionToolEnabled() {
 					parts = append(parts, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: visionImagePlaceholder(source)})
 					continue
@@ -528,9 +583,16 @@ func normalizeAgentImageURL(raw string) string {
 	return strings.TrimSpace(strings.Trim(source, "\"'"))
 }
 
-// requestImageLinks 汇总本轮可访问的图片原始链接，
-// 独立识图模式由占位符逐张标注，直连模式则靠这段文本把链接补给主模型。
+// requestImageLinks 汇总本轮可访问的图片链接。
+// 启用 R2 临时图床时，严禁暴露原始图片地址，仅返回已上传的临时 R2 直链。
 func (p *plugin) requestImageLinks(ctx *zero.Ctx) string {
+	if p.r2Enabled() {
+		staged := p.r2StagedImages(ctx)
+		if len(staged) == 0 {
+			return ""
+		}
+		return "本轮图片的临时 R2 搜图直链（可用于浏览器反查出处；本轮对话结束后自动从 R2 删除，严禁将该临时链接当作最终出处发给用户）：\n" + formatR2StagedLinks(staged)
+	}
 	images := p.requestImageSources(ctx)
 	if len(images) == 0 {
 		return ""
@@ -545,6 +607,16 @@ func (p *plugin) requestImageLinks(ctx *zero.Ctx) string {
 		return ""
 	}
 	return "本轮图片的可访问原始链接（可用于反查出处或再次下载）：\n" + strings.Join(lines, "\n")
+}
+
+func (p *plugin) r2VisionImagePlaceholder(ctx *zero.Ctx, r2DirectURL string) string {
+	if r2DirectURL != "" {
+		return fmt.Sprintf("[图片：请调用 analyze_images 工具识别；R2临时搜图直链 %s]", r2DirectURL)
+	}
+	if err := p.r2TurnUploadError(ctx); err != nil {
+		return "[图片：请调用 analyze_images 工具识别；R2 临时图床上传失败，当前无法提供搜图直链]"
+	}
+	return "[图片：请调用 analyze_images 工具识别；如需以图搜图/反查出处，请读取 REVERSE_IMAGE_SEARCH_SKILL.md 或调用 prepare_search_images 获取临时 R2 直链]"
 }
 
 // visionImagePlaceholder 在独立识图模式下代替图片本体，
@@ -1267,7 +1339,18 @@ func (p *plugin) callTool(ctx *zero.Ctx, name string, rawArgs string) string {
 
 	switch name {
 	case "read_skill":
-		content, err := p.readSkillFile(stringArg(args, "name"))
+		skillName := stringArg(args, "name")
+		content, err := p.readSkillFile(skillName)
+		if err == nil && p.r2Enabled() && ctx != nil && isReverseImageSearchSkill(skillName) && p.cfg.Vision.Enabled && p.hasRequestImages(ctx) {
+			if items, upErr := p.ensureR2TurnUploaded(ctx, p.activeTraceTurn(ctx)); upErr == nil && len(items) > 0 {
+				content += "\n\n---\n## 本轮已自动上传的临时 Cloudflare R2 搜图直链\n系统已将待搜图片上传至 R2（本轮对话结束后自动删除，严禁将该临时链接当作最终出处发给用户）：\n" + formatR2StagedLinks(items)
+			} else if upErr != nil {
+				content += "\n\n---\n⚠️ 自动上传图片至 Cloudflare R2 失败：" + upErr.Error()
+			}
+		}
+		return toolResult(content, err)
+	case "prepare_search_images":
+		content, err := p.callPrepareSearchImages(ctx)
 		return toolResult(content, err)
 	case "write_memory":
 		err := p.writeScopedMemoryFile(p.memoryScopePrefix(ctx), stringArg(args, "key"), stringArg(args, "content"))

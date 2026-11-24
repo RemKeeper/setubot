@@ -25,17 +25,20 @@ category: search
 
 按优先级取得可公网访问的图片 URL（下文记为 `IMG`）：
 
-1. 用户消息中的「本轮图片的可访问原始链接」或图片占位符里的「原始链接」。
-2. `analyze_images` 返回结果末尾附带的图片原始链接。
-3. 用户在文字里直接给出的图片 URL / 帖子 URL（帖子 URL 应先打开取出图片直链）。
+1. **优先使用系统自动提供的临时 Cloudflare R2 搜图直链**：
+   - 启用 R2 临时图床后，原始 QQ/OneBot 图片链接会被隐藏，用户消息占位符、`read_skill("REVERSE_IMAGE_SEARCH_SKILL.md")` 返回末尾或 `prepare_search_images` 工具只会提供临时 R2 直链。
+   - 若上下文中尚未出现临时 R2 直链且 `prepare_search_images` 工具可用，先调用一次 `prepare_search_images` 获取 R2 直链。
+   - **重要**：临时 R2 直链仅用于本轮交给以图搜图引擎检索，本轮对话结束后系统会**自动从 R2 删除**；严禁把该临时 R2 链接当作「图片出处」或「原图下载链接」发给用户。
+2. 未启用 R2 时，使用用户消息中的「本轮图片的可访问原始链接」、图片占位符里的「原始链接」或 `analyze_images` 返回末尾附带的图片链接。
+3. 用户在文字里直接给出的外部图片 URL / 帖子 URL（帖子 URL 应先打开取出图片直链）。
 
 要求：
 
 - 链接中的 `&amp;` 必须还原成 `&`。
-- 拼进搜图引擎 URL 时**必须整体 `encodeURIComponent`**，否则 QQ 图片链接里的 `&rkey=...` 会被截断，引擎拿到的是坏图。
+- 拼进搜图引擎 URL 时**必须整体 `encodeURIComponent`**（尤其是预签名直链或带查询参数的链接），否则 `&` 后的参数会被截断，引擎拿到的是坏图。
 - 推荐让子代理在页面里用 JS 跳转，避免手工编码出错：
   `location.href = 'https://saucenao.com/search.php?db=999&url=' + encodeURIComponent('IMG')`
-- QQ 图片链接（`multimedia.nt.qq.com.cn`、`gchat.qpic.cn` 等）有时效性。若多个引擎都提示「无法获取图片 / invalid image / 403」，说明链接已过期或引擎无法访问，应告知用户重新发送原图，或发送图片所在帖子的链接。
+- 未启用 R2 且使用 QQ 图片链接（`multimedia.nt.qq.com.cn`、`gchat.qpic.cn` 等）时，链接有时效性；若多个引擎都提示「无法获取图片 / invalid image / 403」，应告知用户重新发送原图，或发送图片所在帖子的链接。
 
 ## 第 1 步：选择引擎
 

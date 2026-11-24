@@ -107,6 +107,7 @@ go build -o setubot .
 - `vision.maxImageBytes`：单张远程图片下载大小上限，默认 `20971520`（20 MiB）。工具会由机器人本地下载 HTTP(S) 图片，校验类型后转换为 Base64 Data URL，再发送给视觉模型，避免模型侧访问 QQ 临时链接时触发防盗链。
 - `vision.maxResultChars`：视觉模型结果返回主对话前的字符上限，默认 `12000`。
 - `vision.temperature`：视觉模型温度，建议使用较低值以减少识别结果臆测。
+- `r2`：Cloudflare R2 临时搜图图床配置（S3 兼容接口）。开启 `r2.enabled=true` 后，用户消息及引用消息中的原始图片链接（如 QQ `multimedia.nt.qq.com.cn` 签名链接）将完全对模型隐藏；搜图时由机器人自动把图片上传至 R2，模型只能拿到临时 R2 直链（配置 `publicBaseURL` 时返回自定义域名/`r2.dev` 干净直链，留空时自动生成 S3 SigV4 预签名 GET 直链），并在该轮对话结束时通过 `defer` 自动从 R2 删除对象。支持直接配置 `accountId`、`accessKeyId`、`secretAccessKey`、`bucket`、`publicBaseURL` 或使用环境变量 `R2_ACCOUNT_ID`、`R2_ACCESS_KEY_ID`、`R2_SECRET_ACCESS_KEY`、`R2_BUCKET`、`R2_PUBLIC_BASE_URL`。
 - `taskGuard`：长流程任务约束配置；启用后，当用户请求命中关键词时会注入完成度约束提示，并可用 `maxSteps` 提高该轮工具循环上限。
 - `forwardImage.webpSurfacePath`：合并转发隐藏图（`webpHidden=true`）使用的表层图片路径，作为第一帧短暂显示。输出尺寸由隐藏图片决定。
 - `forwardImage.webpCacheMaxBytes`：隐藏图 WebP 缓存目录（`forward_image_webp_cache`）总大小上限，默认 `536870912`。
